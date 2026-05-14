@@ -25,4 +25,13 @@ import { EventListener } from './chain/EventListener.js';
 // TODO: Log startup message
 // TODO: Handle process signals (SIGINT, SIGTERM) for graceful shutdown
 // TODO: Close Redis and shutdown on exit
+import { Server } from 'socket.io';
+import rateLimitMiddleware from './ratelimiter.js';
 
+const io = new Server(server);
+io.use(rateLimitMiddleware); // This activates the code above
+
+import registerReconnectHandler from './reconnecthandler.js';
+
+// ... inside io.on('connection')
+registerReconnectHandler(io, socket, redisClient);
