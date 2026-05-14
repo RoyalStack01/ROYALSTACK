@@ -18,7 +18,7 @@ export function createAdminRoutes(app, authService, poolService, gameRoomManager
     next();
   };
 
-  // Cancel pool - refund all players
+  // Cancel pool — contract auto-refunds all depositors in the same tx
   app.post('/admin/cancel-pool/:poolId', adminMiddleware, async (req, res) => {
     try {
       const { poolId } = req.params;
@@ -36,7 +36,7 @@ export function createAdminRoutes(app, authService, poolService, gameRoomManager
       await poolService.syncPoolFromChain(poolId);
 
       res.json({
-        message: 'Pool cancelled',
+        message: 'Pool cancelled — all depositors automatically refunded on-chain',
         poolId,
         participants: poolState.participants,
       });

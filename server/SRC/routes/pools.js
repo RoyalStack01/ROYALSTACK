@@ -137,10 +137,10 @@ export function createPoolRoutes(app, authService, poolService, cancellationMana
         return res.status(400).json(result);
       }
 
-      // If creator left and pool was cancelled
+      // If creator left and pool was cancelled — cancelPool auto-refunds all depositors
       if (isCreator && result.success === true) {
         return res.json({
-          message: 'Pool auto-cancelled because creator left',
+          message: 'Pool cancelled — all depositors have been automatically refunded on-chain',
           poolId,
           action: 'cancelled',
           ...result,

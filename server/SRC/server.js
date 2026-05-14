@@ -322,6 +322,10 @@ export async function initializeServer() {
         }
 
         const poolId = iface.parseLog(log).args[0].toString();
+
+        // Store the initiating user as room creator — contract creator is admin wallet, not the user
+        await redisClient.hSet(`room:${poolId}:meta`, 'creator', req.user.walletAddress);
+
         console.log(`✓ Pool ${poolId} created by server for ${req.user.walletAddress}`);
         res.json({ poolId });
       } catch (error) {

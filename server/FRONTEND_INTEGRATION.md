@@ -7,7 +7,8 @@
 | Network | Mezo Testnet — Chain ID `31611` |
 | RPC | `https://rpc.test.mezo.org` |
 | Pool Contract | `0x16CaA43924343bd66793108e0c22b701665ea5aa` |
-| Token (mezo) | `0x7B7c000000000000000000000000000000000001` |
+| Deposit Token (Mezo Token ERC-20) | `0x7B7c000000000000000000000000000000000001` |
+| Gas Token | mBTC — native currency, used only for transaction fees |
 | Server (dev) | `http://localhost:3002` |
 
 ---
@@ -80,11 +81,12 @@ After getting `poolId`, immediately show the **Fund the Pot** screen (step 3).
 
 ## 3. Funding the Pot (Deposit)
 
-This is the only time the frontend talks to the contract directly. Two transactions required.
+This is the only time the frontend talks to the contract directly. Two transactions required. Players deposit **Mezo Token** (ERC-20) — not mBTC. mBTC is only needed in the wallet to cover gas on both transactions.
 
-### Step A — Approve the contract to spend the user's mBTC
+### Step A — Approve the contract to spend the user's Mezo Token
 ```js
-const token = new ethers.Contract(TOKEN_ADDRESS, ERC20_ABI, signer);
+const MEZO_TOKEN_ADDRESS = '0x7B7c000000000000000000000000000000000001';
+const token = new ethers.Contract(MEZO_TOKEN_ADDRESS, ERC20_ABI, signer);
 await token.approve(POOL_CONTRACT_ADDRESS, amount);
 ```
 
@@ -258,47 +260,34 @@ Authorization: Bearer <sessionToken>
 
 Response: { "message": "Left pool", "poolId": "42", "playersRemaining": 2 }
 ```
-If the **creator** leaves, the pool is auto-cancelled and all players can withdraw.
 
-### Creator cancels
-```
-POST /api/pools/:poolId/cancel
-Authorization: Bearer <sessionToken>
+### Pool cancellation (server-triggered)
 
-Response: { "success": true, "poolId": "42", "reason": "creator_requested", "playersRefunded": 3 }
-```
+Two things cause the server to call `cancelPool()` on the contract:
+1. The room doesn't reach 5 players within 10 minutes — server auto-cancels on timeout
+2. The server determines the pool should be closed for any other reason
 
----
+`cancelPool()` **automatically refunds all depositors** in the same transaction. No action required from players — their Mezo Token is returned to their wallets immediately when the transaction confirms. Listen for `WithdrawalMade` events per participant to confirm refunds landed.
 
-## 7. Withdrawing a Deposit
-
-Only available when a pool is cancelled (status `CLOSED`). Frontend calls the contract directly.
-
-```js
-const pool = new ethers.Contract(POOL_CONTRACT_ADDRESS, POOL_ABI, signer);
-await pool.withdrawDeposit(poolId);
-```
-
-ABI for `withdrawDeposit`:
-```json
-{
-  "type": "function",
-  "name": "withdrawDeposit",
-  "inputs": [
-    { "name": "poolId", "type": "uint256" }
-  ],
-  "outputs": [],
-  "stateMutability": "nonpayable"
-}
-```
-
-Check if a pool was cancelled before showing the withdraw button:
 ```
 GET /api/pools/:poolId/cancellation-info
 Authorization: Bearer <sessionToken>
 
-Response (cancelled): { "cancelled": true, "reason": "creator_requested", "timestamp": 1715600000000 }
-Response (not cancelled): { "cancelled": false }
+Response (cancelled): { "cancelled": true, "reason": "timeout", "timestamp": 1715600000000 }
+Response (active):    { "cancelled": false }
+```
+
+---
+
+## 7. Withdrawing a Deposit (Edge Case Only)
+
+`withdrawDeposit` is **not part of the normal cancellation flow** — `cancelPool` handles all refunds automatically.
+
+Only relevant if a player deposited but the pool was never formally cancelled (e.g. contract-level edge case). Frontend calls the contract directly:
+
+```js
+const pool = new ethers.Contract(POOL_CONTRACT_ADDRESS, POOL_ABI, signer);
+await pool.withdrawDeposit(poolId);
 ```
 
 ---
@@ -326,8 +315,8 @@ If the frontend wants to react to on-chain events without polling the server:
 | Event | Trigger |
 |---|---|
 | `DepositMade(poolId, participant, amount)` | Player funded the pot |
-| `WithdrawalMade(poolId, participant, amount)` | Player withdrew deposit |
-| `PoolCancelled(poolId, creator)` | Pool was cancelled |
+| `PoolCancelled(poolId, creator)` | Pool was cancelled — refunds are processing |
+| `WithdrawalMade(poolId, participant, amount)` | One participant's refund confirmed (emitted per player by `cancelPool`) |
 | `awardedPot(poolId, participant, amount)` | Winner paid out |
 
 Full ABI is in `src/chain/abis/Pool.json`.

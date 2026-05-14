@@ -156,7 +156,7 @@ export default class PoolCancellationManager {
       // Get all players for refund records
       const players = await this.poolService.getPoolPlayers(poolId);
 
-      // Call contract to cancel and enable player withdrawals
+      // Call contract — cancelPool auto-refunds all depositors in the same tx
       if (this.signedContract) {
         try {
           const tx = await this.signedContract.cancelPool(poolId);

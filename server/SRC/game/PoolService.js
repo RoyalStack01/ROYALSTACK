@@ -13,23 +13,25 @@ export default class PoolService {
 
   async getPoolState(poolId) {
     const sid = safeId(poolId);
+
+    // Room creator is stored separately — contract creator is the admin wallet, not the user
+    const meta = await this.redis.hGetAll(`room:${sid}:meta`);
+    const roomCreator = meta?.creator || null;
+
     const cached = await this.redis.hGetAll(`pool:${sid}`);
     if (cached && Object.keys(cached).length > 0) {
-      return JSON.parse(Object.values(cached)[0]);
+      const state = JSON.parse(Object.values(cached)[0]);
+      return { ...state, creator: roomCreator ?? state.creator };
     }
 
     const onChain = await this.contract.pools(poolId);
     const state = {
       id: onChain.id.toString(),
-      creator: onChain.creator,
+      creator: roomCreator ?? onChain.creator,
       balance: onChain.balance.toString(),
       status: onChain.poolStatus === 0 ? 'ACTIVE' : 'CLOSED',
-      participants: onChain.participants.filter(
-        addr => addr !== '0x0000000000000000000000000000000000000000'
-      ),
-      playerCount: onChain.participants.filter(
-        addr => addr !== '0x0000000000000000000000000000000000000000'
-      ).length,
+      participantCount: Number(onChain.participantCount),
+      totalDeposited: onChain.totalDeposited.toString(),
     };
 
     await this.redis.hSet(`pool:${sid}`, JSON.stringify(state));
@@ -77,15 +79,17 @@ export default class PoolService {
 
   async syncPoolFromChain(poolId) {
     const sid = safeId(poolId);
+    const meta = await this.redis.hGetAll(`room:${sid}:meta`);
+    const roomCreator = meta?.creator || null;
+
     const onChain = await this.contract.pools(poolId);
     const state = {
       id: onChain.id.toString(),
-      creator: onChain.creator,
+      creator: roomCreator ?? onChain.creator,
       balance: onChain.balance.toString(),
       status: onChain.poolStatus === 0 ? 'ACTIVE' : 'CLOSED',
-      participants: onChain.participants.filter(
-        addr => addr !== '0x0000000000000000000000000000000000000000'
-      ),
+      participantCount: Number(onChain.participantCount),
+      totalDeposited: onChain.totalDeposited.toString(),
     };
 
     await this.redis.hSet(`pool:${sid}`, JSON.stringify(state));
