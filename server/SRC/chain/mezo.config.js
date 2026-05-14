@@ -15,8 +15,38 @@
 import { defineChain } from 'viem';
 import env from '../config/env.js';
 
-// TODO: Define mezoTestnet chain (chainId: 31611)
-// TODO: Define mezoMainnet chain (chainId: 31612)
-// TODO: Set correct RPC URLs from env and chain data
-// TODO: Add block explorer configuration
-// TODO: Export both chain definitions
+export const mezoTestnet = defineChain({
+    id: 31611,
+    name: 'Mezo Testnet',
+    network: 'mezo-testnet',
+    nativeCurrency: {
+        decimals: 18,
+        name: 'Bitcoin',
+        symbol: 'BTC',
+    },
+    rpcUrls: {
+        default: { http: [env.RPC_URL || 'https://rpc.test.mezo.org'] },
+        public: { http: [env.RPC_URL || 'https://rpc.test.mezo.org'] },
+    },
+    blockExplorers: {
+        default: { name: 'Mezo Testnet Explorer', url: 'https://explorer.test.mezo.org' },
+    },
+});
+
+export const mezoMainnet = defineChain({
+    id: 31612,
+    name: 'Mezo Mainnet',
+    network: 'mezo-mainnet',
+    nativeCurrency: {
+        decimals: 18,
+        name: 'Bitcoin',
+        symbol: 'BTC',
+    },
+    rpcUrls: {
+        default: { http: [env.RPC_URL || 'https://rpc.mezo.org'] },
+        public: { http: [env.RPC_URL || 'https://rpc.mezo.org'] },
+    },
+    blockExplorers: {
+        default: { name: 'Mezo Explorer', url: 'https://explorer.mezo.org' },
+    },
+});
