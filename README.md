@@ -8,7 +8,7 @@
 ## Getting Started
 
 ```bash
-git clone https://github.com/16navigabraham/ROYALSTACK
+git clone https://github.com/RoyalStack01/ROYALSTACK
 cd ROYALSTACK
 ```
 
@@ -47,7 +47,7 @@ npm install
 If you only need one folder:
 
 ```bash
-git clone --filter=blob:none --sparse https://github.com/16navigabraham/ROYALSTACK
+git clone --filter=blob:none --sparse https://github.com/RoyalStack01/ROYALSTACK
 cd ROYALSTACK
 git sparse-checkout set server   # or: client, smart-contract
 ```
