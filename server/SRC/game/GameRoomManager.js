@@ -5,10 +5,11 @@
 const MAX_ROOMS = 100;
 
 export default class GameRoomManager {
-  constructor(redisClient, gameStateMachine, historian) {
+  constructor(redisClient, gameStateMachine, historian, signedContract = null) {
     this.redis = redisClient;
     this.gameStateMachine = gameStateMachine;
     this.historian = historian;
+    this.signedContract = signedContract;
     this.activeGames = new Map(); // poolId -> game state
   }
 
@@ -98,6 +99,23 @@ export default class GameRoomManager {
       sidePots,
       winners
     );
+
+    // Pay winner on-chain
+    const winnerAddress = Object.keys(winners).reduce((a, b) =>
+      winners[a] >= winners[b] ? a : b
+    );
+
+    if (this.signedContract && winnerAddress) {
+      try {
+        const tx = await this.signedContract.awardPot(poolId, winnerAddress);
+        await tx.wait();
+        console.log(`✓ awardPot: pool ${poolId} → ${winnerAddress}`);
+      } catch (err) {
+        console.error(`awardPot failed for pool ${poolId}:`, err.message);
+      }
+    } else if (!this.signedContract) {
+      console.warn(`awardPot skipped for pool ${poolId} — no admin wallet`);
+    }
 
     return { sidePots, results, winners };
   }

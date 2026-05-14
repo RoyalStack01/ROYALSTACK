@@ -8,9 +8,14 @@ import { createServer } from 'http';
 import { Server as SocketServer } from 'socket.io';
 import { createClient } from '@libsql/client';
 import redis from 'redis';
+import { ethers } from 'ethers';
+import { createRequire } from 'module';
 import 'dotenv/config';
 import { fileURLToPath } from 'url';
 import path from 'path';
+
+const require = createRequire(import.meta.url);
+const POOL_ABI = require('./chain/abis/Pool.json');
 
 // Import services
 import { WalletAuthService } from './auth/WalletAuthService.js';
@@ -108,15 +113,26 @@ export async function initializeServer() {
       console.log('⚠ Event listener skipped (CONTRACT_ADDRESS not configured)');
     }
 
+    // Admin wallet — signs createPool, cancelPool, awardPot on behalf of the server
+    let signedContract = null;
+    if (process.env.ADMIN_PRIVATE_KEY && eventListener.provider) {
+      const adminWallet = new ethers.Wallet(process.env.ADMIN_PRIVATE_KEY, eventListener.provider);
+      signedContract = new ethers.Contract(contractAddress, POOL_ABI, adminWallet);
+      console.log('✓ Admin wallet loaded');
+    } else {
+      console.warn('⚠ ADMIN_PRIVATE_KEY not set — createPool/cancelPool/awardPot will be unavailable');
+    }
+
     const gameRoomManager = new GameRoomManager(
       redisClient,
       gameStateMachine,
-      historian
+      historian,
+      signedContract
     );
     const poolService = new PoolService(redisClient, eventListener.contract);
     const cancellationManager = new PoolCancellationManager(
       redisClient,
-      eventListener,
+      signedContract,
       poolService
     );
 
@@ -284,6 +300,34 @@ export async function initializeServer() {
 
     app.get('/api/health', (req, res) => {
       res.json({ status: 'ok' });
+    });
+
+    // Create a new pool — server calls createPool() on-chain, returns poolId to frontend
+    app.post('/api/rooms/create', authMiddleware(authService), async (req, res) => {
+      if (!signedContract) {
+        return res.status(503).json({ error: 'Admin wallet not configured' });
+      }
+      try {
+        const tx = await signedContract.createPool();
+        const receipt = await tx.wait();
+
+        // Parse PoolCreated event from receipt to get poolId
+        const iface = new ethers.Interface(POOL_ABI);
+        const log = receipt.logs.find(l => {
+          try { return iface.parseLog(l)?.name === 'PoolCreated'; } catch { return false; }
+        });
+
+        if (!log) {
+          return res.status(500).json({ error: 'Pool created but poolId not found in receipt' });
+        }
+
+        const poolId = iface.parseLog(log).args[0].toString();
+        console.log(`✓ Pool ${poolId} created by server for ${req.user.walletAddress}`);
+        res.json({ poolId });
+      } catch (error) {
+        console.error('Error creating pool:', error.message);
+        res.status(500).json({ error: error.message });
+      }
     });
 
     // ============================================

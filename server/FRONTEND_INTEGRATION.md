@@ -1,174 +1,187 @@
 # RoyalStack — Frontend Integration Guide
 
-**Network:** Mezo Testnet (Chain ID: 31611)  
-**RPC:** `https://rpc.test.mezo.org`  
-**Contract:** `0x16CaA43924343bd66793108e0c22b701665ea5aa`  
-**Server:** `http://localhost:3002` (dev) — update to prod URL when deployed  
-**Token:** `0x7B7c000000000000000000000000000000000001` (mBTC / MEZO)
+## Config
+
+| Key | Value |
+|---|---|
+| Network | Mezo Testnet — Chain ID `31611` |
+| RPC | `https://rpc.test.mezo.org` |
+| Pool Contract | `0x16CaA43924343bd66793108e0c22b701665ea5aa` |
+| Token (mezo) | `0x7B7c000000000000000000000000000000000001` |
+| Server (dev) | `http://localhost:3002` |
 
 ---
 
-## 1. Auth Flow
+## How It Works (High Level)
 
-Every request (REST + WebSocket) requires a session token obtained by signing a nonce with the user's wallet.
+The server owns the admin wallet. When a user starts a room, the **server** calls `createPool()` on-chain — the user never touches that function. What the frontend handles directly on the contract is **only deposit and withdraw**.
 
 ```
-1. GET  /api/auth/nonce   → { nonce, message }
-2. User signs `message` with their wallet
-3. POST /api/auth/verify  → { sessionToken, walletAddress, expiresIn }
-4. Include token on all requests: Authorization: Bearer <sessionToken>
-```
-
-### POST /api/auth/nonce
-```json
-// Request
-{ "walletAddress": "0x..." }
-
-// Response
-{ "nonce": "abc123", "message": "Sign this message to authenticate with RoyalStack...\nNonce: abc123" }
-```
-
-### POST /api/auth/verify
-```json
-// Request
-{ "walletAddress": "0x...", "signature": "0x...", "message": "..." }
-
-// Response
-{ "sessionToken": "...", "walletAddress": "0x...", "expiresIn": 86400 }
-```
-
-### POST /api/auth/logout
-```
-Authorization: Bearer <token>
+User clicks "Start Room"
+  → POST /api/rooms/create           (server creates pool on-chain, returns poolId)
+  → Show "Fund the Pot" screen
+  → User: token.approve() + contract.deposit(poolId, amount)
+  → Server detects DepositMade event, registers player
+  → POST /api/pools/:poolId/join     (registers player in server state)
+  → Wait for 4 more players
+  → Game starts automatically at 5 players
 ```
 
 ---
 
-## 2. Contract Interaction
+## 1. Auth
 
-The frontend talks to the contract **directly** (not through the server) for deposits and withdrawals. The server listens to chain events and updates game state.
+Every REST call and the WebSocket connection require a session token.
 
-### Required ABIs
+### Step 1 — Get a nonce
+```
+POST /api/auth/nonce
+Body: { "walletAddress": "0x..." }
 
-#### `deposit(uint256 poolId, uint256 amount)`
-Player deposits into a pool. Requires prior ERC-20 approval for the contract address.
+Response: { "nonce": "abc123", "message": "Sign this message...\nNonce: abc123" }
+```
 
+### Step 2 — Sign and verify
+User signs the `message` with their wallet (e.g. via ethers `signMessage`), then:
+```
+POST /api/auth/verify
+Body: { "walletAddress": "0x...", "signature": "0x...", "message": "..." }
+
+Response: { "sessionToken": "...", "walletAddress": "0x...", "expiresIn": 86400 }
+```
+
+Use the token on all subsequent calls:
+```
+Authorization: Bearer <sessionToken>
+```
+
+### Logout
+```
+POST /api/auth/logout
+Authorization: Bearer <sessionToken>
+```
+
+---
+
+## 2. Starting a Room
+
+The frontend calls the server — the server creates the pool on-chain using its own wallet.
+
+```
+POST /api/rooms/create
+Authorization: Bearer <sessionToken>
+
+Response: { "poolId": "42" }
+```
+
+After getting `poolId`, immediately show the **Fund the Pot** screen (step 3).
+
+---
+
+## 3. Funding the Pot (Deposit)
+
+This is the only time the frontend talks to the contract directly. Two transactions required.
+
+### Step A — Approve the contract to spend the user's mBTC
+```js
+const token = new ethers.Contract(TOKEN_ADDRESS, ERC20_ABI, signer);
+await token.approve(POOL_CONTRACT_ADDRESS, amount);
+```
+
+Minimum ERC-20 ABI needed for approval:
+```json
+[
+  {
+    "type": "function",
+    "name": "approve",
+    "inputs": [
+      { "name": "spender", "type": "address" },
+      { "name": "amount",  "type": "uint256" }
+    ],
+    "outputs": [{ "name": "", "type": "bool" }],
+    "stateMutability": "nonpayable"
+  }
+]
+```
+
+### Step B — Deposit into the pool
+```js
+const pool = new ethers.Contract(POOL_CONTRACT_ADDRESS, POOL_ABI, signer);
+await pool.deposit(poolId, amount);
+```
+
+ABI for `deposit`:
 ```json
 {
   "type": "function",
   "name": "deposit",
   "inputs": [
-    { "name": "poolId", "type": "uint256", "internalType": "uint256" },
-    { "name": "amount", "type": "uint256", "internalType": "uint256" }
+    { "name": "poolId", "type": "uint256" },
+    { "name": "amount", "type": "uint256" }
   ],
   "outputs": [],
   "stateMutability": "nonpayable"
 }
 ```
 
-**Flow:**
+### Step C — Register with server
+After the deposit tx confirms, tell the server:
 ```
-1. token.approve(CONTRACT_ADDRESS, amount)
-2. pool.deposit(poolId, amount)
+POST /api/pools/:poolId/join
+Authorization: Bearer <sessionToken>
+Body: { "amount": <same amount as deposit, as number> }
+
+Response: { "poolId": "42", "playerCount": 1, "isFull": false }
 ```
-
-#### `withdrawDeposit(uint256 poolId)`
-Player withdraws their deposit from a cancelled or not-yet-started pool.
-
-```json
-{
-  "type": "function",
-  "name": "withdrawDeposit",
-  "inputs": [
-    { "name": "poolId", "type": "uint256", "internalType": "uint256" }
-  ],
-  "outputs": [],
-  "stateMutability": "nonpayable"
-}
-```
-
-#### `createPool()` → `uint256 poolId`
-Creates a new pool. Returns the new pool ID.
-
-```json
-{
-  "type": "function",
-  "name": "createPool",
-  "inputs": [],
-  "outputs": [{ "name": "", "type": "uint256", "internalType": "uint256" }],
-  "stateMutability": "nonpayable"
-}
-```
-
-#### `getBalance(uint256 poolId)` → `uint256`
-Total mBTC deposited in a pool.
-
-#### `getUserBalance(uint256 poolId, address user)` → `uint256`
-A specific player's deposit in a pool.
-
-### Contract Events to Listen For
-| Event | When |
-|---|---|
-| `PoolCreated(poolId, creator)` | New pool opened |
-| `DepositMade(poolId, participant, amount)` | Player deposited |
-| `WithdrawalMade(poolId, participant, amount)` | Player withdrew deposit |
-| `PoolCancelled(poolId, creator)` | Pool was cancelled |
-| `awardedPot(poolId, participant, amount)` | Winner paid out |
-
-Full ABI is at `src/chain/abis/Pool.json`.
 
 ---
 
-## 3. REST API
+## 4. Joining an Existing Room
 
-All endpoints below require `Authorization: Bearer <sessionToken>`.
+User picks a room from the lobby. Same flow as above (steps 3A → 3B → 3C) but with an existing `poolId`.
 
-### Pools
+### Browse open pools
+```
+GET /api/pools
+Authorization: Bearer <sessionToken>
 
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/pools` | List all pools with player count + cancellation info |
-| GET | `/api/pools/:poolId` | Pool detail, player list, readiness |
-| POST | `/api/pools/:poolId/join` | Register join in server state (call after `deposit()` on chain) |
-| POST | `/api/pools/:poolId/leave` | Leave pool (creator leaving auto-cancels) |
-| POST | `/api/pools/:poolId/cancel` | Creator cancels pool |
-| GET | `/api/pools/:poolId/cancellation-info` | Cancellation status |
+Response: [
+  {
+    "poolId": "42",
+    "status": "ACTIVE",
+    "playerCount": 3,
+    "isFull": false,
+    "totalDeposited": "3000000000000000000",
+    "creator": "0x...",
+    "cancellationInfo": null
+  }
+]
+```
 
-#### GET /api/pools/:poolId — Response
-```json
-{
-  "poolId": "1",
-  "creator": "0x...",
+### Get a single pool
+```
+GET /api/pools/:poolId
+Authorization: Bearer <sessionToken>
+
+Response: {
+  "poolId": "42",
   "status": "ACTIVE",
-  "createdAt": 1715600000000,
-  "totalDeposited": "1000000000000000000",
-  "players": ["0x...", "0x..."],
-  "playerCount": 2,
+  "playerCount": 3,
   "isFull": false,
+  "players": [
+    { "address": "0x...", "stack": 1000, "joinedAt": 1715600000000, "status": "active" }
+  ],
+  "totalDeposited": "3000000000000000000",
+  "creator": "0x...",
   "cancellationInfo": null
 }
 ```
 
-#### POST /api/pools/:poolId/join — Request
-```json
-{ "amount": 1000000000000000000 }
-```
-
-### Game Stats
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/players/:walletAddress/stats` | Hands played, won, total winnings |
-| GET | `/api/leaderboard?limit=10` | Top players |
-| GET | `/api/hand/:handId` | Full hand history |
-| GET | `/api/health` | Server health check (no auth) |
-
 ---
 
-## 4. WebSocket (Socket.io)
+## 5. Real-time Game (WebSocket)
 
-Connect with the session token in auth:
-
+Connect after auth:
 ```js
 import { io } from 'socket.io-client';
 
@@ -177,96 +190,161 @@ const socket = io('http://localhost:3002', {
 });
 ```
 
-### Events — Client → Server
-
-#### `JOIN_POOL`
-```json
-{ "poolId": "1" }
+### Join the room channel
+```js
+socket.emit('JOIN_POOL', { poolId: '42' });
+// Server confirms:
+socket.on('POOL_JOINED', ({ poolId, walletAddress }) => { ... });
+// Others in room see:
+socket.on('PLAYER_JOINED', ({ walletAddress }) => { ... });
 ```
 
-#### `PLAYER_ACTION`
-```json
-{
-  "poolId": "1",
-  "action": {
-    "type": "bet | fold | call | raise | check",
-    "amount": 100
+### Send a game action
+```js
+socket.emit('PLAYER_ACTION', {
+  poolId: '42',
+  action: {
+    type: 'bet',   // 'bet' | 'call' | 'raise' | 'fold' | 'check'
+    amount: 100    // omit for fold/check/call
   }
+});
+```
+
+### Game state updates
+Every action triggers this for all players in the room:
+```js
+socket.on('GAME_STATE_UPDATED', (state) => {
+  // state.stage          → 'preflop' | 'flop' | 'turn' | 'river' | 'showdown'
+  // state.pot            → total chips in pot
+  // state.currentPlayer  → walletAddress whose turn it is
+  // state.communityCards → ['Ah', 'Kd', '7c'] (grows each street)
+  // state.players[]      → see below
+  // state.winners        → null until showdown
+});
+```
+
+Player object inside `state.players`:
+```js
+{
+  walletAddress: '0x...',
+  chips: 9500,
+  bet: 100,
+  folded: false,
+  holeCards: ['As', 'Ks']  // only populated for the authenticated player
+                             // null for all other players until showdown
 }
 ```
 
-#### `LEAVE_POOL`
-```json
-{ "poolId": "1" }
+### Other events to handle
+| Event | When | Payload |
+|---|---|---|
+| `ACTION_INVALID` | Your action was rejected | `{ error: string }` |
+| `PLAYER_LEFT` | Someone disconnected | `{ walletAddress }` |
+| `HAND_SAVED` | Hand recorded after showdown | `{ handId }` |
+
+### Leave a room
+```js
+socket.emit('LEAVE_POOL', { poolId: '42' });
 ```
 
-### Events — Server → Client
+---
 
-| Event | Payload | When |
-|---|---|---|
-| `POOL_JOINED` | `{ poolId, walletAddress }` | Confirms your join |
-| `PLAYER_JOINED` | `{ walletAddress }` | Another player joined the room |
-| `PLAYER_LEFT` | `{ walletAddress }` | Player left the room |
-| `GAME_STATE_UPDATED` | Full game state (see below) | After every action |
-| `ACTION_INVALID` | `{ error: string }` | Your action was rejected |
-| `HAND_SAVED` | `{ handId }` | Hand recorded to DB after showdown |
+## 6. Leaving or Cancelling
 
-#### GAME_STATE_UPDATED Payload
+### Player leaves (before game starts)
+```
+POST /api/pools/:poolId/leave
+Authorization: Bearer <sessionToken>
+
+Response: { "message": "Left pool", "poolId": "42", "playersRemaining": 2 }
+```
+If the **creator** leaves, the pool is auto-cancelled and all players can withdraw.
+
+### Creator cancels
+```
+POST /api/pools/:poolId/cancel
+Authorization: Bearer <sessionToken>
+
+Response: { "success": true, "poolId": "42", "reason": "creator_requested", "playersRefunded": 3 }
+```
+
+---
+
+## 7. Withdrawing a Deposit
+
+Only available when a pool is cancelled (status `CLOSED`). Frontend calls the contract directly.
+
+```js
+const pool = new ethers.Contract(POOL_CONTRACT_ADDRESS, POOL_ABI, signer);
+await pool.withdrawDeposit(poolId);
+```
+
+ABI for `withdrawDeposit`:
 ```json
 {
-  "stage": "preflop | flop | turn | river | showdown",
-  "handNumber": 1,
-  "pot": 500,
-  "currentPlayer": "0x...",
-  "communityCards": ["Ah", "Kd", "7c"],
-  "players": [
-    {
-      "walletAddress": "0x...",
-      "chips": 9500,
-      "bet": 100,
-      "folded": false,
-      "holeCards": ["As", "Ks"]
-    }
+  "type": "function",
+  "name": "withdrawDeposit",
+  "inputs": [
+    { "name": "poolId", "type": "uint256" }
   ],
-  "winners": null,
-  "sidePots": []
+  "outputs": [],
+  "stateMutability": "nonpayable"
 }
 ```
 
-> Note: `holeCards` is only present for the authenticated player's own entry. Other players show `null` until showdown.
-
----
-
-## 5. Typical Game Flow
-
+Check if a pool was cancelled before showing the withdraw button:
 ```
-1. Player calls createPool() on contract → gets poolId
-2. Player calls token.approve() then deposit(poolId, amount)
-3. Server detects DepositMade event, registers pool in Redis
-4. Player calls POST /api/pools/:poolId/join (server-side registration)
-5. Player connects via WebSocket and emits JOIN_POOL
-6. Repeat steps 2–5 for up to 5 players
-7. On 5th deposit, server starts the game automatically
-8. Players send PLAYER_ACTION via WebSocket
-9. Server emits GAME_STATE_UPDATED after each action
-10. At showdown, server calls awardPot() on contract → winner gets funds
-11. Players who lost can call withdrawDeposit() for any remaining balance
+GET /api/pools/:poolId/cancellation-info
+Authorization: Bearer <sessionToken>
+
+Response (cancelled): { "cancelled": true, "reason": "creator_requested", "timestamp": 1715600000000 }
+Response (not cancelled): { "cancelled": false }
 ```
 
 ---
 
-## 6. Error Responses
+## 8. Player Stats
 
-All REST errors follow:
+```
+GET /api/players/:walletAddress/stats
+Authorization: Bearer <sessionToken>
+
+Response: { "handsPlayed": 12, "handsWon": 4, "totalWinnings": 8000 }
+```
+
+```
+GET /api/leaderboard?limit=10
+Authorization: Bearer <sessionToken>
+```
+
+---
+
+## 9. Contract Events to Watch (Optional)
+
+If the frontend wants to react to on-chain events without polling the server:
+
+| Event | Trigger |
+|---|---|
+| `DepositMade(poolId, participant, amount)` | Player funded the pot |
+| `WithdrawalMade(poolId, participant, amount)` | Player withdrew deposit |
+| `PoolCancelled(poolId, creator)` | Pool was cancelled |
+| `awardedPot(poolId, participant, amount)` | Winner paid out |
+
+Full ABI is in `src/chain/abis/Pool.json`.
+
+---
+
+## 10. Error Responses
+
 ```json
 { "error": "Human readable message" }
 ```
 
 | Status | Meaning |
 |---|---|
-| 400 | Bad request / validation failed |
+| 400 | Validation failed / bad request |
 | 401 | Missing or expired session token |
-| 403 | Admin-only endpoint |
-| 404 | Pool / hand not found |
-| 429 | Rate limited (20 auth requests/min, 10 actions/5s on WS) |
+| 403 | Admin only |
+| 404 | Pool not found |
+| 429 | Rate limited — 20 auth req/min, 10 game actions/5s |
 | 500 | Server error |

@@ -3,9 +3,9 @@
  */
 
 export default class PoolCancellationManager {
-  constructor(redisClient, eventListener, poolService) {
+  constructor(redisClient, signedContract, poolService) {
     this.redis = redisClient;
-    this.eventListener = eventListener;
+    this.signedContract = signedContract;
     this.poolService = poolService;
     this.timeouts = new Map(); // poolId -> timeout handle
     this.POOL_FILL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes to fill pool
@@ -156,13 +156,17 @@ export default class PoolCancellationManager {
       // Get all players for refund records
       const players = await this.poolService.getPoolPlayers(poolId);
 
-      // Call contract to cancel and trigger refunds
-      try {
-        const tx = await this.eventListener.contract.cancelPool(poolId);
-        await tx.wait();
-        console.log(`✓ Pool ${poolId} cancelled on-chain`);
-      } catch (error) {
-        console.error(`Warning: Failed to cancel pool on-chain: ${error.message}`);
+      // Call contract to cancel and enable player withdrawals
+      if (this.signedContract) {
+        try {
+          const tx = await this.signedContract.cancelPool(poolId);
+          await tx.wait();
+          console.log(`✓ Pool ${poolId} cancelled on-chain`);
+        } catch (error) {
+          console.error(`Warning: Failed to cancel pool on-chain: ${error.message}`);
+        }
+      } else {
+        console.warn(`cancelPool skipped for pool ${poolId} — no admin wallet`);
       }
 
       // Clear timeout
