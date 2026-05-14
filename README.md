@@ -8,7 +8,7 @@
 ## Getting Started
 
 ```bash
-git clone https://github.com/16navigabraham/ROYALSTACK
+git clone https://github.com/RoyalStack01/ROYALSTACK
 cd ROYALSTACK
 ```
 
