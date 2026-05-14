@@ -1,4 +1,4 @@
-const { z } = require('zod');
+import { z } from 'zod';
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'staging', 'production']).default('development'),
@@ -32,4 +32,4 @@ if (!_parsed.success) {
   throw new Error(`Invalid environment variables:\n${issues}`);
 }
 
-module.exports = _parsed.data;
+export default _parsed.data;

@@ -1,5 +1,5 @@
-const { verifyMessage } = require('viem/utils');
-const env = require('../config/env');
+import { verifyMessage } from 'viem/utils';
+import env from '../config/env.js';
 
 /**
  * Socket.io auth middleware.
@@ -43,4 +43,4 @@ async function socketAuthMiddleware(socket, next) {
   }
 }
 
-module.exports = { socketAuthMiddleware };
+export { socketAuthMiddleware };
