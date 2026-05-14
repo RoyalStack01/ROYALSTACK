@@ -26,7 +26,7 @@
 // TODO: Use ShuffleOracle.hash() for verification
 
 import CommitStore from './CommitStore.js';
-import ShuttleOracle from './ShuttleOracle.js';
+import ShuffleOracle from './ShuffleOracle.js';
 
 /**
  * Verifies that the revealed seed matches the stored commitment.
@@ -61,8 +61,8 @@ export default class ProofVerifier {
     }
 
     // Recompute hash: SHA-256(revealedSeed + poolId + nonce)
-    // Using the static method from ShuttleOracle ensures consistent hashing logic
-    const computedHash = ShuttleOracle.hash(revealedSeed, poolId, nonce);
+    // Using the static method from ShuffleOracle ensures consistent hashing logic
+    const computedHash = ShuffleOracle.hash(revealedSeed, poolId, nonce);
 
     // Constant-time comparison is ideal, but for a standard verification 
     // string comparison works here.

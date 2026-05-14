@@ -1,0 +1,448 @@
+/**
+ * Server initialization and wiring.
+ * Connects all components: auth, game engine, database, WebSocket, REST API.
+ */
+
+import express from 'express';
+import { createServer } from 'http';
+import { Server as SocketServer } from 'socket.io';
+import { createClient } from '@libsql/client';
+import redis from 'redis';
+import 'dotenv/config';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+// Import services
+import { WalletAuthService } from './auth/WalletAuthService.js';
+import { authMiddleware, wsAuthMiddleware } from './auth/authMiddleware.js';
+import TursoClient from './db/TursoClient.js';
+import HandHistorian from './db/HandHistorian.js';
+import { GameStateMachine } from './engine/GameStateMachine.js';
+import { Deck } from './engine/Deck.js';
+import { BlindManager } from './engine/BlindManager.js';
+import { TurnTimer } from './engine/TurnTimer.js';
+import { ActionValidator } from './engine/ActionValidator.js';
+import { ShowdownResolver } from './engine/ShowdownResolver.js';
+import { SidePotCalculator } from './engine/SidePotCalculator.js';
+import CommitStore from './oracle/CommitStore.js';
+import ProofVerifier from './oracle/ProofVerifier.js';
+import EventListener from './chain/EventListener.js';
+import GameRoomManager from './game/GameRoomManager.js';
+import PoolService from './game/PoolService.js';
+import PoolCancellationManager from './game/PoolCancellationManager.js';
+import { createAdminRoutes } from './routes/admin.js';
+import { createPoolRoutes } from './routes/pools.js';
+
+const maskAddress = (addr) => `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+
+export async function initializeServer() {
+  try {
+    console.log('🚀 Starting server initialization...');
+
+    // ============================================
+    // 1. Initialize External Services
+    // ============================================
+
+    // Redis (ephemeral game state)
+    console.log('📍 Connecting to Redis...');
+    const redisClient = redis.createClient({
+      url: process.env.REDIS_URL,
+    });
+    await redisClient.connect();
+    console.log('✓ Redis connected');
+
+    // Turso (persistent game history)
+    console.log('📍 Connecting to Turso...');
+    const tursoClient = new TursoClient(
+      process.env.TURSO_CONNECTION_URL,
+      process.env.TURSO_AUTH_TOKEN
+    );
+    const isTursoConnected = await tursoClient.ping();
+    if (!isTursoConnected) throw new Error('Turso connection failed');
+    console.log('✓ Turso connected');
+
+    // ============================================
+    // 2. Initialize Game Engine Components
+    // ============================================
+
+    console.log('📍 Initializing game engine...');
+    const deck = new Deck();
+    const blindManager = new BlindManager(50, 100); // SB=50, BB=100
+    const turnTimer = new TurnTimer();
+    const actionValidator = ActionValidator;
+    const showdownResolver = ShowdownResolver;
+    const sidePotCalculator = SidePotCalculator;
+
+    const gameStateMachine = new GameStateMachine({
+      deck,
+      blindManager,
+      turnTimer,
+      actionValidator,
+      showdownResolver,
+      sidePotCalculator,
+    });
+    console.log('✓ Game engine initialized');
+
+    // ============================================
+    // 3. Initialize Blockchain Components
+    // ============================================
+
+    console.log('📍 Initializing blockchain components...');
+    const commitStore = new CommitStore(redisClient);
+    const proofVerifier = new ProofVerifier(commitStore);
+    const historian = new HandHistorian(tursoClient);
+
+    const contractAddress = process.env.POOL_CONTRACT_ADDRESS || process.env.CONTRACT_ADDRESS;
+    const eventListenerConfig = {
+      contractAddress,
+      redisClient,
+      historian,
+    };
+
+    const eventListener = new EventListener(eventListenerConfig);
+
+    if (contractAddress && contractAddress !== '0x...') {
+      await eventListener.start();
+      console.log('✓ Event listener started');
+    } else {
+      console.log('⚠ Event listener skipped (CONTRACT_ADDRESS not configured)');
+    }
+
+    const gameRoomManager = new GameRoomManager(
+      redisClient,
+      gameStateMachine,
+      historian
+    );
+    const poolService = new PoolService(redisClient, eventListener.contract);
+    const cancellationManager = new PoolCancellationManager(
+      redisClient,
+      eventListener,
+      poolService
+    );
+
+    eventListener.cancellationManager = cancellationManager;
+    console.log('✓ Blockchain components initialized');
+
+    // ============================================
+    // 4. Initialize Authentication
+    // ============================================
+
+    console.log('📍 Initializing authentication...');
+    const authService = new WalletAuthService(redisClient);
+    console.log('✓ Authentication initialized');
+
+    // ============================================
+    // 5. Initialize Express & WebSocket
+    // ============================================
+
+    console.log('📍 Setting up Express and WebSocket...');
+    const app = express();
+    const httpServer = createServer(app);
+    const io = new SocketServer(httpServer, {
+      cors: { origin: process.env.FRONTEND_URL || 'http://localhost:3000' },
+      maxHttpBufferSize: 1e5,
+    });
+
+    // Request timeout middleware (30 seconds)
+    app.use((req, res, next) => {
+      res.setTimeout(30000, () => {
+        res.status(503).json({ error: 'Request timeout' });
+      });
+      next();
+    });
+
+    app.use(express.json());
+
+    // Simple in-memory IP-based rate limiter for auth endpoints
+    const authRateLimitMap = new Map();
+    const AUTH_RATE_LIMIT = 20;
+    const AUTH_RATE_WINDOW = 60 * 1000; // 1 minute
+
+    const authRateLimiter = (req, res, next) => {
+      const ip = req.ip || req.connection.remoteAddress;
+      const now = Date.now();
+      const entry = authRateLimitMap.get(ip) || { count: 0, windowStart: now };
+
+      if (now - entry.windowStart > AUTH_RATE_WINDOW) {
+        entry.count = 0;
+        entry.windowStart = now;
+      }
+
+      entry.count += 1;
+      authRateLimitMap.set(ip, entry);
+
+      if (entry.count > AUTH_RATE_LIMIT) {
+        return res.status(429).json({ error: 'Too many requests, please try again later' });
+      }
+
+      next();
+    };
+
+    // ============================================
+    // 6. REST API Routes (Auth)
+    // ============================================
+
+    app.post('/api/auth/nonce', authRateLimiter, async (req, res) => {
+      const { walletAddress } = req.body;
+
+      if (!walletAddress) {
+        return res.status(400).json({ error: 'Wallet address required' });
+      }
+
+      try {
+        const result = await authService.generateNonce(walletAddress);
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    app.post('/api/auth/verify', authRateLimiter, async (req, res) => {
+      const { walletAddress, signature, message } = req.body;
+
+      if (!walletAddress || !signature || !message) {
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
+
+      try {
+        const result = await authService.verifySignature(
+          walletAddress,
+          signature,
+          message
+        );
+
+        if (!result.valid) {
+          return res.status(401).json({ error: result.error });
+        }
+
+        res.json({
+          sessionToken: result.sessionToken,
+          walletAddress: result.walletAddress,
+          expiresIn: result.expiresIn,
+        });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    app.post('/api/auth/logout', authMiddleware(authService), async (req, res) => {
+      const token = req.headers.authorization?.split(' ')[1];
+      await authService.logout(token);
+      res.json({ message: 'Logged out' });
+    });
+
+    // ============================================
+    // 7. REST API Routes (Game Stats - Protected)
+    // ============================================
+
+    app.get(
+      '/api/players/:walletAddress/stats',
+      authMiddleware(authService),
+      async (req, res) => {
+        try {
+          const stats = await tursoClient.getPlayerStats(
+            req.params.walletAddress
+          );
+          res.json(stats || { handsPlayed: 0, handsWon: 0, totalWinnings: 0 });
+        } catch (error) {
+          res.status(500).json({ error: error.message });
+        }
+      }
+    );
+
+    app.get('/api/leaderboard', authMiddleware(authService), async (req, res) => {
+      try {
+        const limit = req.query.limit || 10;
+        const leaderboard = await tursoClient.getLeaderboard(limit);
+        res.json(leaderboard);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    app.get(
+      '/api/hand/:handId',
+      authMiddleware(authService),
+      async (req, res) => {
+        try {
+          const hand = await tursoClient.getHandDetails(req.params.handId);
+          res.json(hand);
+        } catch (error) {
+          res.status(500).json({ error: error.message });
+        }
+      }
+    );
+
+    app.get('/api/pools/:poolId', authMiddleware(authService), async (req, res) => {
+      try {
+        const poolState = await redisClient.hGetAll(`room:${req.params.poolId}:state`);
+        res.json(poolState);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    app.get('/api/health', (req, res) => {
+      res.json({ status: 'ok' });
+    });
+
+    // ============================================
+    // 7. Admin Routes
+    // ============================================
+
+    createAdminRoutes(app, authService, poolService, gameRoomManager, tursoClient);
+
+    // ============================================
+    // 7B. Pool Management Routes
+    // ============================================
+
+    createPoolRoutes(app, authService, poolService, cancellationManager);
+
+    // ============================================
+    // 8. WebSocket Handlers (Game)
+    // ============================================
+
+    io.use(wsAuthMiddleware(authService));
+
+    io.on('connection', async (socket) => {
+      if (!socket.user?.walletAddress) {
+        socket.disconnect(true);
+        return;
+      }
+
+      const { walletAddress } = socket.user;
+      console.log(`✓ ${maskAddress(walletAddress)} connected`);
+
+      // Per-socket rate limiting for PLAYER_ACTION: max 10 per 5 seconds
+      let actionCount = 0;
+      let actionWindowStart = Date.now();
+      const ACTION_RATE_LIMIT = 10;
+      const ACTION_RATE_WINDOW = 5000;
+
+      socket.on('JOIN_POOL', async (data) => {
+        const { poolId } = data;
+
+        await redisClient.hSet(
+          `room:${poolId}:players`,
+          walletAddress,
+          JSON.stringify({
+            status: 'joined',
+            joinedAt: Date.now(),
+          })
+        );
+
+        socket.join(`pool:${poolId}`);
+        socket.emit('POOL_JOINED', { poolId, walletAddress });
+        socket.to(`pool:${poolId}`).emit('PLAYER_JOINED', { walletAddress });
+      });
+
+      socket.on('PLAYER_ACTION', async (data) => {
+        // Rate limit check
+        const now = Date.now();
+        if (now - actionWindowStart > ACTION_RATE_WINDOW) {
+          actionCount = 0;
+          actionWindowStart = now;
+        }
+        actionCount += 1;
+        if (actionCount > ACTION_RATE_LIMIT) {
+          socket.emit('ACTION_INVALID', { error: 'Too many actions, slow down' });
+          return;
+        }
+
+        const { poolId, action } = data;
+        const state = gameStateMachine.applyAction(walletAddress, action);
+
+        if (state.error) {
+          socket.emit('ACTION_INVALID', { error: state.error });
+          return;
+        }
+
+        io.to(`pool:${poolId}`).emit('GAME_STATE_UPDATED', state);
+
+        if (state.stage === 'showdown') {
+          try {
+            await historian.saveHand(
+              poolId,
+              state.handNumber,
+              state,
+              state.sidePots,
+              state.winners
+            );
+            io.to(`pool:${poolId}`).emit('HAND_SAVED', {
+              handId: state.handId,
+            });
+          } catch (error) {
+            console.error('Error saving hand:', error);
+          }
+        }
+      });
+
+      socket.on('LEAVE_POOL', async (data) => {
+        const { poolId } = data;
+        await redisClient.hDel(`room:${poolId}:players`, walletAddress);
+        socket.leave(`pool:${poolId}`);
+        socket.to(`pool:${poolId}`).emit('PLAYER_LEFT', { walletAddress });
+      });
+
+      socket.on('disconnect', async () => {
+        console.log(`✗ ${maskAddress(walletAddress)} disconnected`);
+      });
+    });
+
+    // ============================================
+    // 9. Start Server
+    // ============================================
+
+    const PORT = process.env.PORT || 3002;
+    httpServer.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+    });
+
+    // Graceful shutdown
+    const shutdown = async (signal) => {
+      console.log(`${signal} received. Shutting down gracefully...`);
+      httpServer.close(async () => {
+        try {
+          await redisClient.quit();
+          console.log('✓ Redis closed');
+        } catch (err) {
+          console.error('Error closing Redis:', err.message);
+        }
+        process.exit(0);
+      });
+
+      // Force exit after 10 seconds if server doesn't close
+      setTimeout(() => {
+        console.error('Forced shutdown after timeout');
+        process.exit(1);
+      }, 10000);
+    };
+
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
+
+    return {
+      app,
+      httpServer,
+      io,
+      redisClient,
+      tursoClient,
+      authService,
+      gameStateMachine,
+      historian,
+      eventListener,
+    };
+  } catch (error) {
+    console.error('❌ Server initialization failed:', error.message);
+    console.error(error);
+    throw error;
+  }
+}
+
+// Start if run directly
+if (fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  initializeServer().catch((error) => {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  });
+}
