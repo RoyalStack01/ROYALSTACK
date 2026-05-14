@@ -251,9 +251,29 @@ socket.emit('LEAVE_POOL', { poolId: '42' });
 
 ---
 
-## 6. Leaving or Cancelling
+## 6. Leaving a Room (Before Game Starts)
 
-### Player leaves (before game starts)
+A player who has already deposited calls `withdrawDeposit()` directly on the contract to take their Mezo Token back out. The server detects the `WithdrawalMade` event and removes them from the room automatically.
+
+### Step 1 — Call withdrawDeposit on-chain
+```js
+const pool = new ethers.Contract(POOL_CONTRACT_ADDRESS, POOL_ABI, signer);
+await pool.withdrawDeposit(poolId);
+```
+
+ABI:
+```json
+{
+  "type": "function",
+  "name": "withdrawDeposit",
+  "inputs": [{ "name": "poolId", "type": "uint256" }],
+  "outputs": [],
+  "stateMutability": "nonpayable"
+}
+```
+
+### Step 2 — Notify server
+After the tx confirms, tell the server to update its state:
 ```
 POST /api/pools/:poolId/leave
 Authorization: Bearer <sessionToken>
@@ -261,13 +281,15 @@ Authorization: Bearer <sessionToken>
 Response: { "message": "Left pool", "poolId": "42", "playersRemaining": 2 }
 ```
 
-### Pool cancellation (server-triggered)
+---
 
-Two things cause the server to call `cancelPool()` on the contract:
-1. The room doesn't reach 5 players within 10 minutes — server auto-cancels on timeout
-2. The server determines the pool should be closed for any other reason
+## 7. Pool Cancellation (Server-Triggered)
 
-`cancelPool()` **automatically refunds all depositors** in the same transaction. No action required from players — their Mezo Token is returned to their wallets immediately when the transaction confirms. Listen for `WithdrawalMade` events per participant to confirm refunds landed.
+The server calls `cancelPool()` when the room doesn't reach 5 players within 10 minutes. This is automatic — players do not trigger it.
+
+`cancelPool()` **automatically refunds all remaining depositors** in the same transaction. No action required from players — their Mezo Token is returned immediately when the tx confirms.
+
+Listen for `WithdrawalMade` events per participant to confirm individual refunds landed.
 
 ```
 GET /api/pools/:poolId/cancellation-info
@@ -275,19 +297,6 @@ Authorization: Bearer <sessionToken>
 
 Response (cancelled): { "cancelled": true, "reason": "timeout", "timestamp": 1715600000000 }
 Response (active):    { "cancelled": false }
-```
-
----
-
-## 7. Withdrawing a Deposit (Edge Case Only)
-
-`withdrawDeposit` is **not part of the normal cancellation flow** — `cancelPool` handles all refunds automatically.
-
-Only relevant if a player deposited but the pool was never formally cancelled (e.g. contract-level edge case). Frontend calls the contract directly:
-
-```js
-const pool = new ethers.Contract(POOL_CONTRACT_ADDRESS, POOL_ABI, signer);
-await pool.withdrawDeposit(poolId);
 ```
 
 ---

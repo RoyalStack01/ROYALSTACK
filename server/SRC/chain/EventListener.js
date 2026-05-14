@@ -132,10 +132,11 @@ export default class EventListener {
           continue;
         }
 
-        if (name === 'PoolCreated')         await this._onPoolCreated(poolId, args[1], args[2]);
-        else if (name === 'DepositMade')    await this._onDepositMade(poolId, args[1], args[2]);
-        else if (name === 'Rewardreleased') await this._onRewardReleased(poolId, args[1], args[2]);
-        else if (name === 'PoolCancelled')  await this._onPoolCancelled(poolId);
+        if (name === 'PoolCreated')          await this._onPoolCreated(poolId, args[1], args[2]);
+        else if (name === 'DepositMade')     await this._onDepositMade(poolId, args[1], args[2]);
+        else if (name === 'WithdrawalMade')  await this._onWithdrawalMade(poolId, args[1], args[2]);
+        else if (name === 'Rewardreleased')  await this._onRewardReleased(poolId, args[1], args[2]);
+        else if (name === 'PoolCancelled')   await this._onPoolCancelled(poolId);
       } catch (err) {
         console.error('Error parsing log:', err.message);
       }
@@ -189,6 +190,17 @@ export default class EventListener {
       }
     } catch (error) {
       console.error('Error handling DepositMade:', error);
+    }
+  }
+
+  async _onWithdrawalMade(poolId, participant, amount) {
+    try {
+      console.log(`🚪 WithdrawalMade: poolId=${poolId}, player=${participant}, amount=${amount}`);
+      await this.redisClient.hDel(`room:${poolId}:players`, participant.toString());
+      const remaining = await this.redisClient.hLen(`room:${poolId}:players`);
+      console.log(`✓ Player ${participant} removed from pool ${poolId} (${remaining} remaining)`);
+    } catch (error) {
+      console.error('Error handling WithdrawalMade:', error);
     }
   }
 
