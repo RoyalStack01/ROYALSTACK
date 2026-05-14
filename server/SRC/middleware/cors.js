@@ -1,5 +1,5 @@
-const cors = require('cors');
-const env = require('../config/env');
+import cors from 'cors';
+import env from '../config/env.js';
 
 /**
  * CORS middleware for Express and Socket.io.
@@ -20,4 +20,4 @@ const socketCorsOptions = {
   credentials: true,
 };
 
-module.exports = { corsMiddleware, socketCorsOptions };
+export { corsMiddleware, socketCorsOptions };
