@@ -28,3 +28,84 @@
 // TODO: Implement getAll(poolId, nonce)
 // TODO: Implement _key(poolId, nonce)
 // TODO: Set TTL_SECONDS = 86400
+
+/**
+ * Redis store for seed + commitment hash per hand.
+ * Keys expire after 24h to bound memory use.
+ */
+
+const TTL_SECONDS = 86400; // 24 hours
+
+export default class CommitStore {
+  /**
+   * @param {Object} redisClient - An initialized Redis client (e.g., from 'redis' npm package)
+   */
+  constructor(redisClient) {
+    if (!redisClient) {
+      throw new Error("Redis client is required for CommitStore");
+    }
+    this.redis = redisClient;
+  }
+
+  /**
+   * Internal key formatter
+   * @param {string|number} poolId 
+   * @param {string|number} nonce 
+   * @returns {string}
+   */
+  _key(poolId, nonce) {
+    return `oracle:commit:${poolId}:${nonce}`;
+  }
+
+  /**
+   * Store and set TTL
+   * @param {string|number} poolId 
+   * @param {string|number} nonce 
+   * @param {Object} data - { seed, commitment }
+   */
+  async save(poolId, nonce, { seed, commitment }) {
+    const key = this._key(poolId, nonce);
+    
+    // Using hSet to store multiple fields in a Redis hash
+    await this.redis.hSet(key, {
+      seed: seed,
+      commitment: commitment
+    });
+
+    // Set expiration so we don't leak memory
+    await this.redis.expire(key, TTL_SECONDS);
+  }
+
+  /**
+   * Get commitment hash only
+   * @returns {Promise<string|null>}
+   */
+  async getCommitment(poolId, nonce) {
+    const key = this._key(poolId, nonce);
+    return await this.redis.hGet(key, 'commitment');
+  }
+
+  /**
+   * Get revealed seed
+   * @returns {Promise<string|null>}
+   */
+  async getSeed(poolId, nonce) {
+    const key = this._key(poolId, nonce);
+    return await this.redis.hGet(key, 'seed');
+  }
+
+  /**
+   * Get all data for a hand
+   * @returns {Promise<Object|null>}
+   */
+  async getAll(poolId, nonce) {
+    const key = this._key(poolId, nonce);
+    const data = await this.redis.hGetAll(key);
+    
+    // Redis hGetAll returns an empty object {} if the key doesn't exist
+    if (Object.keys(data).length === 0) {
+      return null;
+    }
+    return data;
+  }
+}
