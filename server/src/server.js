@@ -37,6 +37,8 @@ import PoolService from './game/PoolService.js';
 import PoolCancellationManager from './game/PoolCancellationManager.js';
 import { createAdminRoutes } from './routes/admin.js';
 import { createPoolRoutes } from './routes/pools.js';
+import swaggerUi from 'swagger-ui-express';
+import { swaggerSpec } from './config/swagger.js';
 
 const maskAddress = (addr) => `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 
@@ -168,6 +170,16 @@ export async function initializeServer() {
     });
 
     app.use(express.json());
+
+    // ============================================
+    // Swagger API Documentation
+    // ============================================
+    app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+      swaggerOptions: {
+        persistAuthorization: true,
+        displayOperationId: true,
+      },
+    }));
 
     // Simple in-memory IP-based rate limiter for auth endpoints
     const authRateLimitMap = new Map();
