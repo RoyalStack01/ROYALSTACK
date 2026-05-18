@@ -7,5 +7,3 @@ coverage
 *.log
 *.tsbuildinfo
 .env.local
-
-/BUILD
