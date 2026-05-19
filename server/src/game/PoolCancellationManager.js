@@ -52,7 +52,13 @@ export default class PoolCancellationManager {
       for (const id of poolIds) {
         const state = await this.poolService.getPoolState(id);
         if (!state || state.status !== 'ACTIVE') continue;
-        if (state.gameStarted) continue; // game already running, timeout no longer relevant
+
+        // gameStarted lives in room:N:state, not in the pool cache
+        const roomRaw = await this.redis.hGet(`room:${id}:state`, 'data');
+        if (roomRaw) {
+          const roomState = JSON.parse(roomRaw);
+          if (roomState.gameStarted) continue;
+        }
 
         const createdAt = state.createdAt || 0;
         const elapsed = Date.now() - createdAt;
