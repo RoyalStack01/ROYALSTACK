@@ -114,7 +114,7 @@ const options = {
         },
         WaitlistJoinRequest: {
           type: 'object',
-          required: ['walletAddress'],
+          required: ['walletAddress', 'username', 'email', 'followedX'],
           properties: {
             walletAddress: {
               type: 'string',
@@ -125,13 +125,13 @@ const options = {
             username: {
               type: 'string',
               pattern: '^[a-zA-Z0-9_.-]{1,30}$',
-              description: 'Optional display username (1-30 alphanumeric chars)',
+              description: 'Display username (1-30 chars: letters, digits, _ . -)',
               example: 'cryptoking',
             },
             email: {
               type: 'string',
               format: 'email',
-              description: 'Optional email address for updates',
+              description: 'Email address for updates',
               example: 'player@example.com',
             },
             followedX: {
@@ -144,19 +144,22 @@ const options = {
         WaitlistJoinResponse: {
           type: 'object',
           properties: {
-            success: { type: 'boolean', example: true },
-            message: { type: 'string', example: "You're on the waitlist. Follow us on X for updates: https://x.com/RoyalStack_" },
+            success:    { type: 'boolean', example: true },
+            message:    { type: 'string', example: "You're on the waitlist! Follow us on X: https://x.com/RoyalStack_" },
+            inviteCode: { type: 'string', example: 'a1b2c3d4e5', description: 'Unique 10-char invite code for this wallet' },
+            inviteLink: { type: 'string', example: 'https://royalstack.io/invite/a1b2c3d4e5', description: 'Shareable invite URL' },
           },
         },
         WaitlistEntry: {
           type: 'object',
           properties: {
-            id:         { type: 'integer' },
-            wallet:     { type: 'string', example: '0x1234...' },
-            username:   { type: 'string', nullable: true },
-            email:      { type: 'string', format: 'email', nullable: true },
-            followed_x: { type: 'integer', enum: [0, 1] },
-            created_at: { type: 'string', format: 'date-time' },
+            id:          { type: 'integer' },
+            wallet:      { type: 'string', example: '0x1234...' },
+            username:    { type: 'string' },
+            email:       { type: 'string', format: 'email' },
+            followed_x:  { type: 'integer', enum: [0, 1] },
+            invite_code: { type: 'string', example: 'a1b2c3d4e5' },
+            created_at:  { type: 'string', format: 'date-time' },
           },
         },
         WaitlistAdminResponse: {
@@ -602,7 +605,7 @@ const options = {
         post: {
           tags: ['Waitlist'],
           summary: 'Join the RoyalStack waitlist',
-          description: 'Submit your wallet address and optional username to join the early-access waitlist. Rate limited to 3 submissions per hour per IP. Same wallet address is deduplicated (upsert).',
+          description: 'Join the early-access waitlist. All fields are required. Returns a unique invite code and shareable invite link per wallet. Same wallet address is deduplicated (upsert) — re-submitting preserves your original invite code. Rate limited to 3 submissions per hour per IP.',
           requestBody: {
             required: true,
             content: {
