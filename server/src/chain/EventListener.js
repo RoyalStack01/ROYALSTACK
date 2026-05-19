@@ -259,6 +259,10 @@ export default class EventListener {
         await this.redisClient.hSet(poolKey, 'data', JSON.stringify(state));
       }
 
+      if (this.io) {
+        this.io.to(`pool:${poolId}`).emit('POOL_CANCELLED', { poolId: poolId.toString(), reason: 'on-chain' });
+      }
+
       console.log(`✓ Pool ${poolId} marked as closed`);
     } catch (error) {
       console.error('Error handling PoolCancelled:', error);

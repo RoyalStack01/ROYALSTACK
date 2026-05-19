@@ -216,6 +216,11 @@ export default class PoolCancellationManager {
       // Clear timeout
       this.clearPoolTimeout(poolId);
 
+      // Notify connected clients
+      if (this.io) {
+        this.io.to(`pool:${poolId}`).emit('POOL_CANCELLED', { poolId: poolId.toString(), reason });
+      }
+
       return {
         success: true,
         poolId,

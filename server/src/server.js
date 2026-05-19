@@ -144,6 +144,7 @@ export async function initializeServer() {
 
     eventListener.cancellationManager = cancellationManager;
 
+    // io is wired below after socket server is created
     // Re-arm cancellation timers for pools that were active before this restart
     await cancellationManager.restoreTimeouts();
 
@@ -380,6 +381,9 @@ export async function initializeServer() {
     // ============================================
     // 8. WebSocket Handlers (Game)
     // ============================================
+
+    cancellationManager.io = io;
+    eventListener.io = io;
 
     io.use(wsAuthMiddleware(authService));
 
