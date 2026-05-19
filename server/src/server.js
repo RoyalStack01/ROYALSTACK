@@ -4,6 +4,7 @@
  */
 
 import express from 'express';
+import cors from 'cors';
 import { createServer } from 'http';
 import { Server as SocketServer } from 'socket.io';
 import { createClient } from '@libsql/client';
@@ -163,6 +164,8 @@ export async function initializeServer() {
       cors: { origin: process.env.FRONTEND_URL || 'http://localhost:3000' },
       maxHttpBufferSize: 1e5,
     });
+
+    app.use(cors({ origin: true, credentials: true }));
 
     // Request timeout middleware (30 seconds)
     app.use((req, res, next) => {
