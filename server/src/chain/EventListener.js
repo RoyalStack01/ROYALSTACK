@@ -176,14 +176,26 @@ export default class EventListener {
     try {
       console.log(`💰 DepositMade: poolId=${poolId}, player=${participant}, amount=${amount}`);
 
+      // Convert wei to chips. 1 Mezo Token (1e18 wei) = CHIPS_PER_TOKEN chips.
+      const CHIPS_PER_TOKEN = 100;
+      const tokenAmount = Number(BigInt(amount.toString()) / BigInt(1e15)) / 1000; // tokens with 3dp precision
+      const chips = Math.floor(tokenAmount * CHIPS_PER_TOKEN);
+
+      // Merge with any existing record (REST join may have already created a pending entry).
+      const existing = await this.redisClient.hGet(`room:${poolId}:players`, participant);
+      const base = existing ? JSON.parse(existing) : {};
+
       await this.redisClient.hSet(`room:${poolId}:players`, participant, JSON.stringify({
-        status: 'joined',
-        joinedAt: Date.now(),
-        depositAmount: amount.toString(),
+        ...base,
+        address: participant,
+        stack: chips,
+        depositAmount: amount.toString(), // raw wei — kept for audit
+        joinedAt: base.joinedAt || Date.now(),
+        status: 'active',
       }));
 
       const playerCount = await this.redisClient.hLen(`room:${poolId}:players`);
-      console.log(`🎮 Pool ${poolId} has ${playerCount}/5 players`);
+      console.log(`🎮 Pool ${poolId} has ${playerCount}/5 players (${participant} → ${chips} chips)`);
 
       if (playerCount === 5) {
         await this._startGame(poolId);

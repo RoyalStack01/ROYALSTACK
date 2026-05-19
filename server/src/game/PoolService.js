@@ -47,13 +47,19 @@ export default class PoolService {
     return null;
   }
 
-  async addPlayerToPool(poolId, playerAddress, depositAmount) {
+  async addPlayerToPool(poolId, playerAddress) {
     const sid = safeId(poolId);
+
+    // Merge with any existing record — EventListener may have already written
+    // the verified on-chain stack from the DepositMade event.
+    const existing = await this.redis.hGet(`room:${sid}:players`, playerAddress);
+    const base = existing ? JSON.parse(existing) : {};
+
     const player = {
+      ...base,
       address: playerAddress,
-      stack: parseInt(depositAmount),
-      joinedAt: Date.now(),
-      status: 'active',
+      joinedAt: base.joinedAt || Date.now(),
+      status: 'pending', // stack is set later by EventListener from on-chain DepositMade
     };
 
     await this.redis.hSet(

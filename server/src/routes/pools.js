@@ -2,8 +2,6 @@
  * Pool management routes - join, leave, cancel
  */
 
-const MAX_DEPOSIT = 1000000;
-
 export function createPoolRoutes(app, authService, poolService, cancellationManager) {
   const authMiddleware = async (req, res, next) => {
     const token = req.headers.authorization?.split(' ')[1];
@@ -69,13 +67,8 @@ export function createPoolRoutes(app, authService, poolService, cancellationMana
   app.post('/api/pools/:poolId/join', authMiddleware, validatePoolId, async (req, res) => {
     try {
       const { poolId } = req.params;
-      const { amount } = req.body;
       // walletAddress comes from auth header via middleware
       const walletAddress = req.user?.walletAddress;
-
-      if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_DEPOSIT) {
-        return res.status(400).json({ error: 'Invalid deposit amount' });
-      }
 
       const poolState = await poolService.getPoolState(poolId);
       if (!poolState) {
@@ -90,11 +83,11 @@ export function createPoolRoutes(app, authService, poolService, cancellationMana
         return res.status(400).json({ error: 'Pool is full' });
       }
 
-      // Add player to pool
+      // Register player as pending — chip stack is set by EventListener
+      // once the on-chain DepositMade event is confirmed.
       const playerCount = await poolService.addPlayerToPool(
         poolId,
-        walletAddress,
-        amount
+        walletAddress
       );
 
       console.log(`✓ Player joined pool ${poolId} (${playerCount}/5)`);
