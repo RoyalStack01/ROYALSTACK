@@ -143,6 +143,10 @@ export async function initializeServer() {
     );
 
     eventListener.cancellationManager = cancellationManager;
+
+    // Re-arm cancellation timers for pools that were active before this restart
+    await cancellationManager.restoreTimeouts();
+
     console.log('✓ Blockchain components initialized');
 
     // ============================================

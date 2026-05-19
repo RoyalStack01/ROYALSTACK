@@ -15,7 +15,7 @@ export default class PoolCancellationManager {
    * Start timeout when pool is created
    * If not filled within time, auto-cancel
    */
-  async startPoolTimeout(poolId) {
+  async startPoolTimeout(poolId, delayMs = this.POOL_FILL_TIMEOUT_MS) {
     // Clear existing timeout if any
     if (this.timeouts.has(poolId)) {
       clearTimeout(this.timeouts.get(poolId));
@@ -35,9 +35,46 @@ export default class PoolCancellationManager {
       }
 
       this.timeouts.delete(poolId);
-    }, this.POOL_FILL_TIMEOUT_MS);
+    }, delayMs);
 
     this.timeouts.set(poolId, timeoutHandle);
+  }
+
+  /**
+   * On server restart, re-arm timeouts for all active pools that haven't expired yet.
+   * Called once during server initialization after all components are wired up.
+   */
+  async restoreTimeouts() {
+    try {
+      const poolIds = await this.poolService.getAllPools();
+      let restored = 0;
+
+      for (const id of poolIds) {
+        const state = await this.poolService.getPoolState(id);
+        if (!state || state.status !== 'ACTIVE') continue;
+
+        const createdAt = state.createdAt || 0;
+        const elapsed = Date.now() - createdAt;
+        const remaining = this.POOL_FILL_TIMEOUT_MS - elapsed;
+
+        if (remaining <= 0) {
+          // Already expired — cancel immediately
+          console.log(`⏱️ Pool ${id} expired during downtime, cancelling...`);
+          await this.cancelPool(id, 'auto', 'Pool fill timeout (expired during restart)');
+        } else {
+          // Re-arm with remaining time
+          await this.startPoolTimeout(id, remaining);
+          restored++;
+          console.log(`⏱️ Pool ${id} timeout restored (${Math.round(remaining / 1000)}s remaining)`);
+        }
+      }
+
+      if (restored > 0 || poolIds.length > 0) {
+        console.log(`✓ Cancellation timeouts restored (${restored} active pools)`);
+      }
+    } catch (err) {
+      console.error('Failed to restore pool timeouts:', err.message);
+    }
   }
 
   /**
