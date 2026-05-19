@@ -9,6 +9,7 @@ import { randomBytes } from 'crypto';
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const USERNAME_RE    = /^[a-zA-Z0-9_.-]{1,30}$/;
 const EMAIL_RE       = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/;
+const INVITE_CODE_RE = /^[0-9a-fA-F]{10}$/;
 
 // Max body size guard (in chars) — stops oversized payload attacks before any DB work
 const MAX_BODY_CHARS = 700;
@@ -76,6 +77,18 @@ export async function createWaitlistTable(tursoClient) {
       `ALTER TABLE waitlist ADD COLUMN invite_code TEXT NOT NULL DEFAULT ''`
     );
   } catch (_) { /* column already exists — safe to ignore */ }
+  // Migration: add joined_tg (boolean) and referred_by (invite code of inviter)
+  try {
+    await tursoClient.client.execute(
+      `ALTER TABLE waitlist ADD COLUMN joined_tg INTEGER NOT NULL DEFAULT 0`
+    );
+  } catch (_) {}
+
+  try {
+    await tursoClient.client.execute(
+      `ALTER TABLE waitlist ADD COLUMN referred_by TEXT`
+    );
+  } catch (_) {}
 }
 
 export function createWaitlistRoutes(app, tursoClient, adminSecret) {
@@ -86,7 +99,7 @@ export function createWaitlistRoutes(app, tursoClient, adminSecret) {
     waitlistRateLimiter,
     checkBodySize,
     async (req, res) => {
-      const { walletAddress, username, email, followedX } = req.body ?? {};
+      const { walletAddress, username, email, followedX, joinedTG, referredBy } = req.body ?? {};
 
       // All fields are required
       if (typeof walletAddress !== 'string' || !EVM_ADDRESS_RE.test(walletAddress.trim())) {
@@ -105,6 +118,19 @@ export function createWaitlistRoutes(app, tursoClient, adminSecret) {
         return res.status(400).json({ error: 'followedX is required and must be a boolean.' });
       }
 
+      if (typeof joinedTG !== 'boolean') {
+        return res.status(400).json({ error: 'joinedTG is required and must be a boolean.' });
+      }
+
+      let referredByNormalized = null;
+      if (typeof referredBy === 'string' && referredBy.trim().length > 0) {
+        const candidate = referredBy.trim().toLowerCase();
+        if (!INVITE_CODE_RE.test(candidate)) {
+          return res.status(400).json({ error: 'referredBy must be a 10-char hex invite code.' });
+        }
+        referredByNormalized = candidate;
+      }
+
       const ip = req.ip || req.connection.remoteAddress || null;
       const newCode = generateInviteCode();
 
@@ -112,12 +138,14 @@ export function createWaitlistRoutes(app, tursoClient, adminSecret) {
         // RETURNING invite_code gives back the stored code on both insert and conflict —
         // so re-submissions preserve the original invite code rather than generating a new one
         const result = await tursoClient.client.execute({
-          sql: `INSERT INTO waitlist (wallet, username, email, followed_x, invite_code, ip)
-                VALUES (?, ?, ?, ?, ?, ?)
+          sql: `INSERT INTO waitlist (wallet, username, email, followed_x, invite_code, ip, joined_tg, referred_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(wallet) DO UPDATE SET
                   username    = excluded.username,
                   email       = excluded.email,
-                  followed_x  = excluded.followed_x
+                  followed_x  = excluded.followed_x,
+                  joined_tg   = excluded.joined_tg,
+                  referred_by = excluded.referred_by
                 RETURNING invite_code`,
           args: [
             walletAddress.trim().toLowerCase(),
@@ -126,6 +154,8 @@ export function createWaitlistRoutes(app, tursoClient, adminSecret) {
             followedX ? 1 : 0,
             newCode,
             ip,
+            joinedTG ? 1 : 0,
+            referredByNormalized,
           ],
         });
 
@@ -161,6 +191,44 @@ export function createWaitlistRoutes(app, tursoClient, adminSecret) {
       return res.json({ count: result.rows.length, entries: result.rows });
     } catch (error) {
       return res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Public leaderboard for waitlist invites — ranks by number of referrals
+  app.get('/api/waitlist/leaderboard', async (req, res) => {
+    const rawLimit = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 10;
+
+    try {
+      const result = await tursoClient.client.execute(
+        `SELECT inviter.invite_code AS invite_code,
+                inviter.wallet AS wallet,
+                inviter.username AS username,
+                COUNT(referred.id) AS invites
+         FROM waitlist AS inviter
+         LEFT JOIN waitlist AS referred ON referred.referred_by = inviter.invite_code
+         GROUP BY inviter.invite_code, inviter.wallet, inviter.username
+         ORDER BY invites DESC, inviter.created_at ASC
+         LIMIT ?`,
+        { args: [limit] }
+      );
+
+      function maskWallet(w) {
+        if (!w || typeof w !== 'string') return null;
+        // ensure lowercase and standard form
+        const s = w.toLowerCase();
+        if (s.length <= 10) return s;
+        return `${s.slice(0, 6)}...${s.slice(-4)}`;
+      }
+
+      return res.json({ count: result.rows.length, entries: result.rows.map(r => ({
+        invites: r.invites,
+        maskedWallet: maskWallet(r.wallet),
+        username: r.username,
+      })) });
+    } catch (error) {
+      console.error('Leaderboard error:', error.message);
+      return res.status(500).json({ error: 'Failed to load leaderboard.' });
     }
   });
 }

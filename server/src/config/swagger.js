@@ -114,7 +114,7 @@ const options = {
         },
         WaitlistJoinRequest: {
           type: 'object',
-          required: ['walletAddress', 'username', 'email', 'followedX'],
+          required: ['walletAddress', 'username', 'email', 'followedX', 'joinedTG'],
           properties: {
             walletAddress: {
               type: 'string',
@@ -139,6 +139,16 @@ const options = {
               description: 'Whether the user has followed @RoyalStack_ on X',
               example: true,
             },
+            joinedTG: {
+              type: 'boolean',
+              description: 'Whether the user wants to join the RoyalStack Telegram group',
+              example: false,
+            },
+            referredBy: {
+              type: 'string',
+              description: 'Optional 10-char invite code used when signing up',
+              example: 'a1b2c3d4e5',
+            },
           },
         },
         WaitlistJoinResponse: {
@@ -158,8 +168,18 @@ const options = {
             username:    { type: 'string' },
             email:       { type: 'string', format: 'email' },
             followed_x:  { type: 'integer', enum: [0, 1] },
+            joined_tg:   { type: 'integer', enum: [0, 1] },
+            referred_by: { type: 'string' },
             invite_code: { type: 'string', example: 'a1b2c3d4e5' },
             created_at:  { type: 'string', format: 'date-time' },
+          },
+        },
+        WaitlistLeaderboardEntry: {
+          type: 'object',
+          properties: {
+            invites:      { type: 'integer', description: 'Number of successful referrals' },
+            maskedWallet: { type: 'string', description: 'Masked wallet address (server-side)' },
+            username:     { type: 'string', description: 'Inviter username' },
           },
         },
         WaitlistAdminResponse: {
@@ -722,6 +742,42 @@ const options = {
                   },
                 },
               },
+            },
+          },
+        },
+      },
+      '/api/waitlist/leaderboard': {
+        get: {
+          tags: ['Waitlist'],
+          summary: 'Public waitlist invite leaderboard',
+          description: 'Public leaderboard ranking waitlist members by number of successful referrals (invites). No authentication required.',
+          parameters: [
+            {
+              name: 'limit',
+              in: 'query',
+              required: false,
+              description: 'Number of top inviters to return (default: 10, max: 100)',
+              schema: { type: 'integer', default: 10, example: 10 },
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'Leaderboard data',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      count: { type: 'integer' },
+                      entries: { type: 'array', items: { $ref: '#/components/schemas/WaitlistLeaderboardEntry' } },
+                    },
+                  },
+                },
+              },
+            },
+            '500': {
+              description: 'Server error',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
             },
           },
         },

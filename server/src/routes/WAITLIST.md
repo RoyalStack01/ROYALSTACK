@@ -19,7 +19,9 @@ Content-Type: application/json
   "walletAddress": "0x1234567890123456789012345678901234567890",
   "username": "cryptoking",
   "email": "player@example.com",
-  "followedX": true
+  "followedX": true,
+  "joinedTG": false,
+  "referredBy": ""
 }
 ```
 
@@ -29,6 +31,8 @@ Content-Type: application/json
 | `username`      | string  | 1–30 chars, letters/digits/`_`/`.`/`-` only       |
 | `email`         | string  | Valid email, max 320 chars                         |
 | `followedX`     | boolean | Must be `true` or `false`                          |
+| `joinedTG`      | boolean | Whether the user wants to join the Telegram group  |
+| `referredBy`    | string  | Optional 10-char invite code used when signing up  |
 
 **Response `201`**
 ```json
@@ -43,6 +47,8 @@ Content-Type: application/json
 - `inviteCode` — unique 10-char hex code, one per wallet
 - `inviteLink` — shareable URL for the invite
 - Re-submitting the same wallet updates username/email/followedX but **preserves the original invite code**
+ - `inviteLink` — shareable URL for the invite
+ - Re-submitting the same wallet updates username/email/followedX/joinedTG/referredBy but **preserves the original invite code**
 
 **Error responses**
 
@@ -124,3 +130,32 @@ CREATE TABLE IF NOT EXISTS waitlist (
 - **Input validation** — strict regex on wallet, username, email; type check on followedX
 - **Admin obfuscation** — wrong/missing secret returns 404, not 403
 - **Invite code** — cryptographically random (`crypto.randomBytes`), 40-bit entropy
+
+---
+
+### `GET /api/waitlist/leaderboard` — Public invite leaderboard
+
+Public endpoint that ranks waitlist members by number of successful referrals (how many signups used their invite code).
+
+**Request**
+```http
+GET /api/waitlist/leaderboard?limit=10
+```
+
+Query parameter `limit` controls how many top inviters are returned (default 10, max 100).
+
+**Response `200`**
+```json
+{
+  "count": 3,
+  "entries": [
+    { "invites": 12, "maskedWallet": "0x1234...cdef", "username": "cryptoking" }
+  ]
+}
+```
+
+Returned fields:
+
+- `invites`: number — how many signups used this user's invite code
+- `maskedWallet`: string — server-side masked wallet address (frontend should also mask when displaying)
+- `username`: string — inviter's display username
