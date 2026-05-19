@@ -198,6 +198,51 @@ export default class TursoClient {
   }
 
   /**
+   * Create all required tables if they don't exist.
+   * Safe to call on every startup.
+   */
+  async createTables() {
+    await this.client.executeMultiple(`
+      CREATE TABLE IF NOT EXISTS hands (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        poolId TEXT NOT NULL,
+        handNumber INTEGER NOT NULL,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        winner TEXT,
+        potAmount INTEGER DEFAULT 0,
+        stage TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        handId INTEGER NOT NULL,
+        playerId TEXT NOT NULL,
+        action TEXT NOT NULL,
+        amount INTEGER DEFAULT 0,
+        stage TEXT,
+        sequence INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS player_stats (
+        playerId TEXT PRIMARY KEY,
+        handsPlayed INTEGER DEFAULT 0,
+        handsWon INTEGER DEFAULT 0,
+        totalWinnings INTEGER DEFAULT 0,
+        totalRakePaid INTEGER DEFAULT 0,
+        lastUpdated DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS pool_stats (
+        poolId TEXT PRIMARY KEY,
+        totalHands INTEGER DEFAULT 0,
+        totalPotAmount INTEGER DEFAULT 0,
+        totalRakeCollected INTEGER DEFAULT 0,
+        lastUpdated DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+  }
+
+  /**
    * Health check: verify connection
    * @returns {Promise<boolean>}
    */

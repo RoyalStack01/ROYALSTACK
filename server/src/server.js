@@ -69,6 +69,8 @@ export async function initializeServer() {
     const isTursoConnected = await tursoClient.ping();
     if (!isTursoConnected) throw new Error('Turso connection failed');
     console.log('✓ Turso connected');
+    await tursoClient.createTables();
+    console.log('✓ Game tables ready');
     await createWaitlistTable(tursoClient);
     console.log('✓ Waitlist table ready');
 
