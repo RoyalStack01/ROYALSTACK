@@ -405,6 +405,16 @@ export async function initializeServer() {
       socket.on('JOIN_POOL', async (data) => {
         const { poolId } = data;
 
+        // If pool already closed, tell client immediately
+        const roomRaw = await redisClient.hGet(`room:${poolId}:state`, 'data');
+        if (roomRaw) {
+          const roomState = JSON.parse(roomRaw);
+          if (roomState.status === 'CLOSED') {
+            socket.emit('POOL_CANCELLED', { poolId, reason: 'already_closed' });
+            return;
+          }
+        }
+
         const alreadyIn = await redisClient.hExists(`room:${poolId}:players`, walletAddress);
 
         await redisClient.hSet(
