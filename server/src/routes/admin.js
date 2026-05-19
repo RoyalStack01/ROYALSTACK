@@ -5,7 +5,7 @@
 
 const maskWallet = (addr) => addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : 'unknown';
 
-export function createAdminRoutes(app, authService, poolService, gameRoomManager, tursoClient) {
+export function createAdminRoutes(app, authService, poolService, gameRoomManager, tursoClient, signedContract) {
   const adminMiddleware = async (req, res, next) => {
     const token = req.headers.authorization?.split(' ')[1];
     const { valid, walletAddress } = await authService.verifySession(token);
@@ -41,6 +41,27 @@ export function createAdminRoutes(app, authService, poolService, gameRoomManager
         participants: poolState.participants,
       });
     } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Force-refund a pool by calling cancelPool on-chain regardless of Redis state.
+  // Use when pool is already CLOSED in Redis but cancelPool was never called on-chain.
+  app.post('/admin/force-refund/:poolId', adminMiddleware, async (req, res) => {
+    try {
+      const { poolId } = req.params;
+      if (!signedContract) {
+        return res.status(503).json({ error: 'Admin wallet not configured' });
+      }
+
+      console.log(`🛑 Force-refunding pool ${poolId} on-chain...`);
+      const tx = await signedContract.cancelPool(poolId);
+      const receipt = await tx.wait();
+
+      console.log(`✓ Pool ${poolId} force-refunded — tx ${receipt.hash}`);
+      res.json({ success: true, poolId, txHash: receipt.hash });
+    } catch (error) {
+      console.error(`Force-refund failed for pool ${req.params.poolId}:`, error.message);
       res.status(500).json({ error: error.message });
     }
   });

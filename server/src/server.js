@@ -356,7 +356,7 @@ export async function initializeServer() {
     // 7. Admin Routes
     // ============================================
 
-    createAdminRoutes(app, authService, poolService, gameRoomManager, tursoClient);
+    createAdminRoutes(app, authService, poolService, gameRoomManager, tursoClient, signedContract);
 
     // ============================================
     // 7B. Pool Management Routes

@@ -132,7 +132,7 @@ export default class EventListener {
           continue;
         }
 
-        if (name === 'PoolCreated')          await this._onPoolCreated(poolId, args[1], args[2]);
+        if (name === 'PoolCreated')          await this._onPoolCreated(poolId, args[1]);
         else if (name === 'DepositMade')     await this._onDepositMade(poolId, args[1], args[2]);
         else if (name === 'WithdrawalMade')  await this._onWithdrawalMade(poolId, args[1], args[2]);
         else if (name === 'Rewardreleased')  await this._onRewardReleased(poolId, args[1], args[2]);
@@ -145,22 +145,22 @@ export default class EventListener {
     this._lastBlock = toBlock;
   }
 
-  async _onPoolCreated(poolId, creator, initialDeposit) {
+  async _onPoolCreated(poolId, creator) {
     try {
-      console.log(`📍 PoolCreated: poolId=${poolId}, creator=${creator}, deposit=${initialDeposit}`);
+      console.log(`📍 PoolCreated: poolId=${poolId}, creator=${creator}`);
 
       const poolState = {
         poolId: poolId.toString(),
         creator,
         status: 'ACTIVE',
         createdAt: Date.now(),
-        playerCount: 1,
-        totalDeposited: initialDeposit.toString(),
+        playerCount: 0,
+        totalDeposited: '0',
         handNumber: 0,
       };
 
       await this.redisClient.hSet(`room:${poolId}:state`, 'data', JSON.stringify(poolState));
-      await this.redisClient.hSet(`room:${poolId}:players`, creator, 'joined');
+      // Don't pre-populate players — the creator's seat is confirmed by DepositMade event
 
       if (this.cancellationManager) {
         await this.cancellationManager.startPoolTimeout(poolId);
@@ -181,9 +181,25 @@ export default class EventListener {
       const tokenAmount = Number(BigInt(amount.toString()) / BigInt(1e15)) / 1000; // tokens with 3dp precision
       const chips = Math.floor(tokenAmount * CHIPS_PER_TOKEN);
 
+      // Bootstrap room state if PoolCreated event was missed (e.g. server restarted after pool creation)
+      const existingState = await this.redisClient.hGet(`room:${poolId}:state`, 'data');
+      if (!existingState) {
+        const fallbackState = {
+          poolId: poolId.toString(),
+          creator: null, // unknown without PoolCreated event
+          status: 'ACTIVE',
+          createdAt: Date.now(),
+          playerCount: 0,
+          totalDeposited: '0',
+          handNumber: 0,
+        };
+        await this.redisClient.hSet(`room:${poolId}:state`, 'data', JSON.stringify(fallbackState));
+        console.log(`⚠ Bootstrapped room:${poolId}:state from DepositMade (PoolCreated was missed)`);
+      }
+
       // Merge with any existing record (REST join may have already created a pending entry).
       const existing = await this.redisClient.hGet(`room:${poolId}:players`, participant);
-      const base = existing ? JSON.parse(existing) : {};
+      const base = (existing && existing !== 'joined') ? JSON.parse(existing) : {};
 
       await this.redisClient.hSet(`room:${poolId}:players`, participant, JSON.stringify({
         ...base,
