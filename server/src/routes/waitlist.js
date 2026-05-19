@@ -6,9 +6,10 @@
 
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const USERNAME_RE    = /^[a-zA-Z0-9_.-]{1,30}$/;
+const EMAIL_RE       = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/;
 
 // Max body size guard (in chars) — stops oversized payload attacks before any DB work
-const MAX_BODY_CHARS = 500;
+const MAX_BODY_CHARS = 600;
 
 // In-memory IP rate limiter: max 3 submissions per hour per IP
 const waitlistRateMap = new Map();
@@ -56,6 +57,7 @@ export async function createWaitlistTable(tursoClient) {
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       wallet     TEXT    NOT NULL UNIQUE,
       username   TEXT,
+      email      TEXT,
       followed_x INTEGER NOT NULL DEFAULT 0,
       ip         TEXT,
       created_at TEXT    NOT NULL DEFAULT (datetime('now'))
@@ -71,7 +73,7 @@ export function createWaitlistRoutes(app, tursoClient, adminSecret) {
     waitlistRateLimiter,
     checkBodySize,
     async (req, res) => {
-      const { walletAddress, username, followedX } = req.body ?? {};
+      const { walletAddress, username, email, followedX } = req.body ?? {};
 
       // Validate wallet
       if (typeof walletAddress !== 'string' || !EVM_ADDRESS_RE.test(walletAddress.trim())) {
@@ -85,6 +87,13 @@ export function createWaitlistRoutes(app, tursoClient, adminSecret) {
         }
       }
 
+      // Validate email if provided
+      if (email !== undefined && email !== null && email !== '') {
+        if (typeof email !== 'string' || !EMAIL_RE.test(email.trim()) || email.length > 320) {
+          return res.status(400).json({ error: 'Invalid email address.' });
+        }
+      }
+
       // followedX must be boolean if provided
       if (followedX !== undefined && typeof followedX !== 'boolean') {
         return res.status(400).json({ error: 'followedX must be a boolean.' });
@@ -94,14 +103,16 @@ export function createWaitlistRoutes(app, tursoClient, adminSecret) {
 
       try {
         await tursoClient.client.execute({
-          sql: `INSERT INTO waitlist (wallet, username, followed_x, ip)
-                VALUES (?, ?, ?, ?)
+          sql: `INSERT INTO waitlist (wallet, username, email, followed_x, ip)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(wallet) DO UPDATE SET
                   username   = excluded.username,
+                  email      = excluded.email,
                   followed_x = excluded.followed_x`,
           args: [
             walletAddress.trim().toLowerCase(),
             typeof username === 'string' ? username.trim() : null,
+            typeof email === 'string' ? email.trim().toLowerCase() : null,
             followedX === true ? 1 : 0,
             ip,
           ],

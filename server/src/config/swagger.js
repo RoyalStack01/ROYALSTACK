@@ -128,6 +128,12 @@ const options = {
               description: 'Optional display username (1-30 alphanumeric chars)',
               example: 'cryptoking',
             },
+            email: {
+              type: 'string',
+              format: 'email',
+              description: 'Optional email address for updates',
+              example: 'player@example.com',
+            },
             followedX: {
               type: 'boolean',
               description: 'Whether the user has followed @RoyalStack_ on X',
@@ -148,6 +154,7 @@ const options = {
             id:         { type: 'integer' },
             wallet:     { type: 'string', example: '0x1234...' },
             username:   { type: 'string', nullable: true },
+            email:      { type: 'string', format: 'email', nullable: true },
             followed_x: { type: 'integer', enum: [0, 1] },
             created_at: { type: 'string', format: 'date-time' },
           },
