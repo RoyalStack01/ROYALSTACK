@@ -313,8 +313,11 @@ export async function initializeServer() {
 
     app.get('/api/pools/:poolId', authMiddleware(authService), async (req, res) => {
       try {
-        const poolState = await redisClient.hGetAll(`room:${req.params.poolId}:state`);
-        res.json(poolState);
+        const raw = await redisClient.hGet(`room:${req.params.poolId}:state`, 'data');
+        if (!raw) return res.status(404).json({ error: 'Pool not found' });
+        const state = JSON.parse(raw);
+        const playerCount = await redisClient.hLen(`room:${req.params.poolId}:players`);
+        res.json({ ...state, playerCount });
       } catch (error) {
         res.status(500).json({ error: error.message });
       }

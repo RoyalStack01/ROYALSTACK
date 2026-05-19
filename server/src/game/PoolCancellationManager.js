@@ -52,6 +52,7 @@ export default class PoolCancellationManager {
       for (const id of poolIds) {
         const state = await this.poolService.getPoolState(id);
         if (!state || state.status !== 'ACTIVE') continue;
+        if (state.gameStarted) continue; // game already running, timeout no longer relevant
 
         const createdAt = state.createdAt || 0;
         const elapsed = Date.now() - createdAt;
