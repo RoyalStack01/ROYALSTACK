@@ -125,6 +125,10 @@ export default class EventListener {
         if (!parsed) continue;
         const { name, args } = parsed;
 
+        // Only handle known pool events — skip AdminUpdated and anything without a poolId
+        const POOL_EVENTS = new Set(['PoolCreated', 'DepositMade', 'WithdrawalMade', 'PoolCancelled', 'awardedPot']);
+        if (!POOL_EVENTS.has(name)) continue;
+
         // Validate poolId is a safe numeric string before using in Redis keys
         const poolId = BigInt(args[0]);
         if (poolId < 0n || poolId > 2n ** 128n) {
@@ -132,11 +136,11 @@ export default class EventListener {
           continue;
         }
 
-        if (name === 'PoolCreated')          await this._onPoolCreated(poolId, args[1]);
-        else if (name === 'DepositMade')     await this._onDepositMade(poolId, args[1], args[2]);
-        else if (name === 'WithdrawalMade')  await this._onWithdrawalMade(poolId, args[1], args[2]);
-        else if (name === 'Rewardreleased')  await this._onRewardReleased(poolId, args[1], args[2]);
-        else if (name === 'PoolCancelled')   await this._onPoolCancelled(poolId);
+        if (name === 'PoolCreated')        await this._onPoolCreated(poolId, args[1]);
+        else if (name === 'DepositMade')   await this._onDepositMade(poolId, args[1], args[2]);
+        else if (name === 'WithdrawalMade') await this._onWithdrawalMade(poolId, args[1], args[2]);
+        else if (name === 'awardedPot')    await this._onRewardReleased(poolId, args[1], args[2]);
+        else if (name === 'PoolCancelled') await this._onPoolCancelled(poolId);
       } catch (err) {
         console.error('Error parsing log:', err.message);
       }
