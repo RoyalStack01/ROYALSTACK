@@ -178,7 +178,8 @@ export default class EventListener {
 
   async _onDepositMade(poolId, participant, amount) {
     try {
-      console.log(`💰 DepositMade: poolId=${poolId}, player=${participant}, amount=${amount}`);
+      const addr = participant.toLowerCase();
+      console.log(`💰 DepositMade: poolId=${poolId}, player=${addr}, amount=${amount}`);
 
       // Convert wei to chips. 1 Mezo Token (1e18 wei) = CHIPS_PER_TOKEN chips.
       const CHIPS_PER_TOKEN = 100;
@@ -201,13 +202,13 @@ export default class EventListener {
         console.log(`⚠ Bootstrapped room:${poolId}:state from DepositMade (PoolCreated was missed)`);
       }
 
-      // Merge with any existing record (REST join may have already created a pending entry).
-      const existing = await this.redisClient.hGet(`room:${poolId}:players`, participant);
+      // Merge with any existing record (socket join may have already created a pending entry).
+      const existing = await this.redisClient.hGet(`room:${poolId}:players`, addr);
       const base = (existing && existing !== 'joined') ? JSON.parse(existing) : {};
 
-      await this.redisClient.hSet(`room:${poolId}:players`, participant, JSON.stringify({
+      await this.redisClient.hSet(`room:${poolId}:players`, addr, JSON.stringify({
         ...base,
-        address: participant,
+        address: addr,
         stack: chips,
         depositAmount: amount.toString(), // raw wei — kept for audit
         joinedAt: base.joinedAt || Date.now(),
@@ -215,7 +216,7 @@ export default class EventListener {
       }));
 
       const playerCount = await this.redisClient.hLen(`room:${poolId}:players`);
-      console.log(`🎮 Pool ${poolId} has ${playerCount}/5 players (${participant} → ${chips} chips)`);
+      console.log(`🎮 Pool ${poolId} has ${playerCount}/5 players (${addr} → ${chips} chips)`);
 
       if (playerCount === 5) {
         await this._startGame(poolId);
@@ -228,7 +229,7 @@ export default class EventListener {
   async _onWithdrawalMade(poolId, participant, amount) {
     try {
       console.log(`🚪 WithdrawalMade: poolId=${poolId}, player=${participant}, amount=${amount}`);
-      await this.redisClient.hDel(`room:${poolId}:players`, participant.toString());
+      await this.redisClient.hDel(`room:${poolId}:players`, participant.toLowerCase());
       const remaining = await this.redisClient.hLen(`room:${poolId}:players`);
       console.log(`✓ Player ${participant} removed from pool ${poolId} (${remaining} remaining)`);
     } catch (error) {
