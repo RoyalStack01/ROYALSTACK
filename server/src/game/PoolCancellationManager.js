@@ -114,11 +114,11 @@ export default class PoolCancellationManager {
       return { valid: false, reason: 'Player not in pool' };
     }
 
-    // Check if game has started (more than 1 player and already betting)
-    const room = await this.redis.hGetAll(`room:${poolId}:state`);
-    if (room && Object.keys(room).length > 0) {
-      const state = JSON.parse(Object.values(room)[0]);
-      if (state.stage !== 'preflop' || state.pot > 0) {
+    // Check if game has started
+    const roomRaw = await this.redis.hGet(`room:${poolId}:state`, 'data');
+    if (roomRaw) {
+      const roomState = JSON.parse(roomRaw);
+      if (roomState.gameStarted) {
         return { valid: false, reason: 'Game has already started' };
       }
     }
@@ -147,10 +147,10 @@ export default class PoolCancellationManager {
     }
 
     // Can't cancel if game is active
-    const room = await this.redis.hGetAll(`room:${poolId}:state`);
-    if (room && Object.keys(room).length > 0) {
-      const state = JSON.parse(Object.values(room)[0]);
-      if (state.stage !== 'preflop' || state.pot > 0) {
+    const roomRaw = await this.redis.hGet(`room:${poolId}:state`, 'data');
+    if (roomRaw) {
+      const roomState = JSON.parse(roomRaw);
+      if (roomState.gameStarted) {
         return { valid: false, reason: 'Cannot cancel pool while game is active' };
       }
     }
@@ -176,10 +176,10 @@ export default class PoolCancellationManager {
       }
 
       // Check if game has started - cannot cancel if it has
-      const room = await this.redis.hGetAll(`room:${poolId}:state`);
-      if (room && Object.keys(room).length > 0) {
-        const state = JSON.parse(Object.values(room)[0]);
-        if (state.stage !== 'preflop' || state.pot > 0) {
+      const roomRaw = await this.redis.hGet(`room:${poolId}:state`, 'data');
+      if (roomRaw) {
+        const roomState = JSON.parse(roomRaw);
+        if (roomState.gameStarted) {
           throw new Error('Cannot cancel pool while game is active');
         }
       }
