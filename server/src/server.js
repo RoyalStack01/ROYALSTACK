@@ -286,7 +286,7 @@ export async function initializeServer() {
 
     app.get('/api/leaderboard', authMiddleware(authService), async (req, res) => {
       try {
-        const limit = req.query.limit || 10;
+        const limit = parseInt(req.query.limit, 10) || 10;
         const leaderboard = await tursoClient.getLeaderboard(limit);
         res.json(leaderboard);
       } catch (error) {
