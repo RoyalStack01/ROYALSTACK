@@ -401,6 +401,8 @@ export async function initializeServer() {
       socket.on('JOIN_POOL', async (data) => {
         const { poolId } = data;
 
+        const alreadyIn = await redisClient.hExists(`room:${poolId}:players`, walletAddress);
+
         await redisClient.hSet(
           `room:${poolId}:players`,
           walletAddress,
@@ -412,7 +414,11 @@ export async function initializeServer() {
 
         socket.join(`pool:${poolId}`);
         socket.emit('POOL_JOINED', { poolId, walletAddress });
-        socket.to(`pool:${poolId}`).emit('PLAYER_JOINED', { walletAddress });
+
+        // Only broadcast to others on the first join, not on reconnects
+        if (!alreadyIn) {
+          socket.to(`pool:${poolId}`).emit('PLAYER_JOINED', { walletAddress });
+        }
       });
 
       socket.on('PLAYER_ACTION', async (data) => {
