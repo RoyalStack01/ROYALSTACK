@@ -142,7 +142,7 @@ export default class PoolCancellationManager {
 
       // Mark as closed in Redis
       const closedState = { ...poolState, status: 'CLOSED' };
-      await this.redis.hSet(`pool:${poolId}`, JSON.stringify(closedState));
+      await this.redis.set(`pool:${poolId}`, JSON.stringify(closedState));
 
       // Store cancellation reason
       await this.redis.hSet(`pool:${poolId}:cancelled`, 'reason', reason);

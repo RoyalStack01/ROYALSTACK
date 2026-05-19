@@ -39,16 +39,16 @@ export default class PoolService {
       return { ...state, creator: roomCreator ?? state.creator };
     }
 
-    const cached = await this.redis.hGetAll(`pool:${sid}`);
-    if (cached && Object.keys(cached).length > 0) {
-      const state = JSON.parse(Object.values(cached)[0]);
+    const cached = await this.redis.get(`pool:${sid}`);
+    if (cached) {
+      const state = JSON.parse(cached);
       return { ...state, creator: roomCreator ?? state.creator };
     }
 
     const onChain = await this.contract.pools(poolId);
     const state = parseOnChain(onChain, roomCreator);
 
-    await this.redis.hSet(`pool:${sid}`, JSON.stringify(state));
+    await this.redis.set(`pool:${sid}`, JSON.stringify(state));
     return state;
   }
 
@@ -101,7 +101,7 @@ export default class PoolService {
     ]);
     const ids = new Set();
     roomKeys.forEach(k => { const m = k.match(/room:(\d+):state/); if (m) ids.add(m[1]); });
-    poolKeys.forEach(k => { const m = k.match(/pool:(\d+)/); if (m) ids.add(m[1]); });
+    poolKeys.forEach(k => { const m = k.match(/^pool:(\d+)$/); if (m) ids.add(m[1]); });
     return [...ids];
   }
 
@@ -113,7 +113,7 @@ export default class PoolService {
     const onChain = await this.contract.pools(poolId);
     const state = parseOnChain(onChain, roomCreator);
 
-    await this.redis.hSet(`pool:${sid}`, JSON.stringify(state));
+    await this.redis.set(`pool:${sid}`, JSON.stringify(state));
     return state;
   }
 }
