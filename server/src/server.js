@@ -413,10 +413,9 @@ export async function initializeServer() {
         );
 
         socket.join(`pool:${poolId}`);
-        socket.emit('POOL_JOINED', { poolId, walletAddress });
 
-        // Only broadcast to others on the first join, not on reconnects
         if (!alreadyIn) {
+          socket.emit('POOL_JOINED', { poolId, walletAddress });
           socket.to(`pool:${poolId}`).emit('PLAYER_JOINED', { walletAddress });
         }
       });
