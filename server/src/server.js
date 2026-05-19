@@ -37,6 +37,7 @@ import PoolService from './game/PoolService.js';
 import PoolCancellationManager from './game/PoolCancellationManager.js';
 import { createAdminRoutes } from './routes/admin.js';
 import { createPoolRoutes } from './routes/pools.js';
+import { createWaitlistRoutes, createWaitlistTable } from './routes/waitlist.js';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './config/swagger.js';
 
@@ -67,6 +68,8 @@ export async function initializeServer() {
     const isTursoConnected = await tursoClient.ping();
     if (!isTursoConnected) throw new Error('Turso connection failed');
     console.log('✓ Turso connected');
+    await createWaitlistTable(tursoClient);
+    console.log('✓ Waitlist table ready');
 
     // ============================================
     // 2. Initialize Game Engine Components
@@ -357,6 +360,12 @@ export async function initializeServer() {
     // ============================================
 
     createPoolRoutes(app, authService, poolService, cancellationManager);
+
+    // ============================================
+    // 7C. Waitlist Routes (public)
+    // ============================================
+
+    createWaitlistRoutes(app, tursoClient, process.env.WAITLIST_ADMIN_SECRET);
 
     // ============================================
     // 8. WebSocket Handlers (Game)

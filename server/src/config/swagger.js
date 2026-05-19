@@ -30,6 +30,12 @@ const options = {
           bearerFormat: 'JWT',
           description: 'Enter the session token returned from /api/auth/verify',
         },
+        adminSecret: {
+          type: 'apiKey',
+          in: 'header',
+          name: 'X-Admin-Secret',
+          description: 'Admin secret key (set via WAITLIST_ADMIN_SECRET env var)',
+        },
       },
       schemas: {
         Error: {
@@ -104,6 +110,53 @@ const options = {
               type: 'integer',
               description: 'Token expiration time in seconds',
             },
+          },
+        },
+        WaitlistJoinRequest: {
+          type: 'object',
+          required: ['walletAddress'],
+          properties: {
+            walletAddress: {
+              type: 'string',
+              pattern: '^0x[0-9a-fA-F]{40}$',
+              description: 'EVM wallet address (the wallet you will use in-game)',
+              example: '0x1234567890123456789012345678901234567890',
+            },
+            username: {
+              type: 'string',
+              pattern: '^[a-zA-Z0-9_.-]{1,30}$',
+              description: 'Optional display username (1-30 alphanumeric chars)',
+              example: 'cryptoking',
+            },
+            followedX: {
+              type: 'boolean',
+              description: 'Whether the user has followed @RoyalStack_ on X',
+              example: true,
+            },
+          },
+        },
+        WaitlistJoinResponse: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            message: { type: 'string', example: "You're on the waitlist. Follow us on X for updates: https://x.com/RoyalStack_" },
+          },
+        },
+        WaitlistEntry: {
+          type: 'object',
+          properties: {
+            id:         { type: 'integer' },
+            wallet:     { type: 'string', example: '0x1234...' },
+            username:   { type: 'string', nullable: true },
+            followed_x: { type: 'integer', enum: [0, 1] },
+            created_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        WaitlistAdminResponse: {
+          type: 'object',
+          properties: {
+            count:   { type: 'integer' },
+            entries: { type: 'array', items: { $ref: '#/components/schemas/WaitlistEntry' } },
           },
         },
         PoolState: {
@@ -534,6 +587,75 @@ const options = {
                   },
                 },
               },
+            },
+          },
+        },
+      },
+      '/api/waitlist': {
+        post: {
+          tags: ['Waitlist'],
+          summary: 'Join the RoyalStack waitlist',
+          description: 'Submit your wallet address and optional username to join the early-access waitlist. Rate limited to 3 submissions per hour per IP. Same wallet address is deduplicated (upsert).',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/WaitlistJoinRequest' },
+              },
+            },
+          },
+          responses: {
+            '201': {
+              description: 'Successfully joined the waitlist',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/WaitlistJoinResponse' },
+                },
+              },
+            },
+            '400': {
+              description: 'Invalid wallet address or username',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+            '413': {
+              description: 'Request body too large',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+            '415': {
+              description: 'Content-Type must be application/json',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+            '429': {
+              description: 'Rate limit exceeded (3 per hour per IP)',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+            '500': {
+              description: 'Server error',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+          },
+        },
+        get: {
+          tags: ['Waitlist'],
+          summary: 'List all waitlist entries (admin only)',
+          description: 'Returns all waitlist entries ordered by signup date. Requires the `X-Admin-Secret` header matching the `WAITLIST_ADMIN_SECRET` environment variable. Returns 404 (not 403) if the secret is wrong to avoid leaking endpoint existence.',
+          security: [{ adminSecret: [] }],
+          responses: {
+            '200': {
+              description: 'Waitlist entries',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/WaitlistAdminResponse' },
+                },
+              },
+            },
+            '404': {
+              description: 'Not found (wrong or missing admin secret)',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            },
+            '500': {
+              description: 'Server error',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
             },
           },
         },
