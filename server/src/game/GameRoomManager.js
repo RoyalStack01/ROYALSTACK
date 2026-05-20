@@ -30,19 +30,16 @@ export default class GameRoomManager {
     const gameState = this.gameStateMachine.startHand(players, seed);
     this.activeGames.set(poolId, gameState);
 
-    await this.redis.hSet(
-      `room:${poolId}:state`,
-      JSON.stringify(gameState)
-    );
+    await this.redis.set(`room:${poolId}:game`, JSON.stringify(gameState), { EX: 86400 });
 
     return gameState;
   }
 
   async getRoom(poolId) {
     if (!this.activeGames.has(poolId)) {
-      const data = await this.redis.hGetAll(`room:${poolId}:state`);
-      if (data && Object.keys(data).length > 0) {
-        const state = JSON.parse(Object.values(data)[0]);
+      const raw = await this.redis.get(`room:${poolId}:game`);
+      if (raw) {
+        const state = JSON.parse(raw);
         this.activeGames.set(poolId, state);
         return state;
       }
@@ -62,10 +59,7 @@ export default class GameRoomManager {
     }
 
     this.activeGames.set(poolId, result);
-    await this.redis.hSet(
-      `room:${poolId}:state`,
-      JSON.stringify(result)
-    );
+    await this.redis.set(`room:${poolId}:game`, JSON.stringify(result), { EX: 86400 });
 
     if (result.stage === 'showdown') {
       await this._resolveShowdown(poolId, result);
@@ -122,7 +116,7 @@ export default class GameRoomManager {
 
   async closeRoom(poolId) {
     this.activeGames.delete(poolId);
-    await this.redis.del(`room:${poolId}:state`);
+    await this.redis.del(`room:${poolId}:game`);
     await this.redis.del(`room:${poolId}:players`);
   }
 
