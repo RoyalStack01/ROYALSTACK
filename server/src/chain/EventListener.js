@@ -345,11 +345,29 @@ export default class EventListener {
         }
       }
 
-      // Emit to all clients in the pool room
+      // Emit to each client individually — strip opponents' hole cards per socket
       if (this.io) {
         const normalized = normalizeGameState(gameState);
         if (normalized) {
-          this.io.to(`pool:${poolId}`).emit('GAME_STATE_UPDATED', normalized);
+          const room = `pool:${poolId}`;
+          const isShowdown = Array.isArray(normalized.winners) && normalized.winners.length > 0;
+          const roomSockets = this.io.sockets.adapter.rooms.get(room);
+          if (roomSockets) {
+            for (const socketId of roomSockets) {
+              const s = this.io.sockets.sockets.get(socketId);
+              if (!s) continue;
+              const addr = (s.data?.walletAddress ?? '').toLowerCase();
+              s.emit('GAME_STATE_UPDATED', {
+                ...normalized,
+                players: normalized.players.map(p => ({
+                  ...p,
+                  holeCards: isShowdown || p.walletAddress.toLowerCase() === addr
+                    ? p.holeCards
+                    : [],
+                })),
+              });
+            }
+          }
         }
         // if createRoom failed, clients stay on waiting screen — no crash
       }

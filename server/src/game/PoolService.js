@@ -73,7 +73,8 @@ export default class PoolService {
       ...base,
       address: playerAddress,
       joinedAt: base.joinedAt || Date.now(),
-      status: 'pending', // stack is set later by EventListener from on-chain DepositMade
+      // Preserve 'active' if EventListener already confirmed the deposit; otherwise 'pending'
+      status: base.status === 'active' ? 'active' : 'pending',
     };
 
     await this.redis.hSet(

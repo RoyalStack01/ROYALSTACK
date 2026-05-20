@@ -59,6 +59,30 @@ function normalizeGameState(state) {
   };
 }
 
+// Emit game state to each socket in a room with opponent cards stripped.
+// Each player only receives their own holeCards; opponents get an empty array
+// unless it's a showdown (winners array is non-empty).
+function emitGameStateToRoom(io, room, state) {
+  const isShowdown = Array.isArray(state.winners) && state.winners.length > 0;
+  const roomSockets = io.sockets.adapter.rooms.get(room);
+  if (!roomSockets) return;
+  for (const socketId of roomSockets) {
+    const s = io.sockets.sockets.get(socketId);
+    if (!s) continue;
+    const addr = (s.data?.walletAddress ?? '').toLowerCase();
+    const perPlayer = {
+      ...state,
+      players: state.players.map(p => ({
+        ...p,
+        holeCards: isShowdown || p.walletAddress.toLowerCase() === addr
+          ? p.holeCards
+          : [],
+      })),
+    };
+    s.emit('GAME_STATE_UPDATED', perPlayer);
+  }
+}
+
 export async function initializeServer() {
   try {
     console.log('🚀 Starting server initialization...');
@@ -400,6 +424,7 @@ export async function initializeServer() {
       }
 
       const { walletAddress } = socket.user;
+      socket.data.walletAddress = walletAddress; // needed by emitGameStateToRoom
       console.log(`✓ ${maskAddress(walletAddress)} connected`);
 
       // Per-socket rate limiting for PLAYER_ACTION: max 10 per 5 seconds
@@ -446,7 +471,19 @@ export async function initializeServer() {
           const st = JSON.parse(stateRaw);
           if (st.gameStarted && gameRoomManager) {
             const gameState = normalizeGameState(await gameRoomManager.getRoom(poolId.toString()));
-            if (gameState) socket.emit('GAME_STATE_UPDATED', gameState);
+            if (gameState) {
+              const isShowdown = Array.isArray(gameState.winners) && gameState.winners.length > 0;
+              const forSelf = {
+                ...gameState,
+                players: gameState.players.map(p => ({
+                  ...p,
+                  holeCards: isShowdown || p.walletAddress.toLowerCase() === walletAddress.toLowerCase()
+                    ? p.holeCards
+                    : [],
+                })),
+              };
+              socket.emit('GAME_STATE_UPDATED', forSelf);
+            }
             // if null, client stays on waiting screen — game will restart on next pool fill
           }
         }
@@ -473,7 +510,8 @@ export async function initializeServer() {
           return;
         }
 
-        io.to(`pool:${poolId}`).emit('GAME_STATE_UPDATED', normalizeGameState(state) ?? state);
+        const normalized = normalizeGameState(state);
+        if (normalized) emitGameStateToRoom(io, `pool:${poolId}`, normalized);
 
         if (state.stage === 'showdown') {
           try {
