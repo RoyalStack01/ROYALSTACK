@@ -5,6 +5,20 @@
 
 import { ethers } from 'ethers';
 import crypto from 'crypto';
+
+function normalizeGameState(state) {
+  if (!state || !Array.isArray(state.players)) return null;
+  return {
+    ...state,
+    players: state.players.map(p => ({
+      ...p,
+      walletAddress: p.walletAddress ?? p.address ?? p.id ?? '',
+      chips:         p.chips         ?? p.stack          ?? 0,
+      bet:           p.bet           ?? p.betThisStreet   ?? 0,
+      holeCards:     p.holeCards     ?? p.hand            ?? [],
+    })),
+  };
+}
 import { createRequire } from 'module';
 import { mezoTestnet } from './mezo.config.js';
 
@@ -328,12 +342,11 @@ export default class EventListener {
 
       // Emit to all clients in the pool room
       if (this.io) {
-        this.io.to(`pool:${poolId}`).emit('GAME_STATE_UPDATED', gameState ?? {
-          stage: 'starting',
-          gameStarted: true,
-          poolId: poolId.toString(),
-          players,
-        });
+        const normalized = normalizeGameState(gameState);
+        if (normalized) {
+          this.io.to(`pool:${poolId}`).emit('GAME_STATE_UPDATED', normalized);
+        }
+        // if createRoom failed, clients stay on waiting screen — no crash
       }
 
       console.log(`✓ Game started in pool ${poolId}`);

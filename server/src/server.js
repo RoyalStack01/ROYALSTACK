@@ -44,6 +44,21 @@ import { swaggerSpec } from './config/swagger.js';
 
 const maskAddress = (addr) => `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 
+// Maps engine-internal player fields to the shape LiveGameTable expects
+function normalizeGameState(state) {
+  if (!state || !Array.isArray(state.players)) return null;
+  return {
+    ...state,
+    players: state.players.map(p => ({
+      ...p,
+      walletAddress: p.walletAddress ?? p.address ?? p.id ?? '',
+      chips:         p.chips         ?? p.stack          ?? 0,
+      bet:           p.bet           ?? p.betThisStreet   ?? 0,
+      holeCards:     p.holeCards     ?? p.hand            ?? [],
+    })),
+  };
+}
+
 export async function initializeServer() {
   try {
     console.log('🚀 Starting server initialization...');
@@ -440,9 +455,10 @@ export async function initializeServer() {
         const stateRaw = await redisClient.hGet(`room:${poolId}:state`, 'data');
         if (stateRaw) {
           const st = JSON.parse(stateRaw);
-          if (st.gameStarted) {
-            const gameState = gameRoomManager ? await gameRoomManager.getRoom(poolId.toString()) : null;
-            socket.emit('GAME_STATE_UPDATED', gameState ?? { stage: 'starting', gameStarted: true, poolId });
+          if (st.gameStarted && gameRoomManager) {
+            const gameState = normalizeGameState(await gameRoomManager.getRoom(poolId.toString()));
+            if (gameState) socket.emit('GAME_STATE_UPDATED', gameState);
+            // if null, client stays on waiting screen — game will restart on next pool fill
           }
         }
       });
@@ -468,7 +484,7 @@ export async function initializeServer() {
           return;
         }
 
-        io.to(`pool:${poolId}`).emit('GAME_STATE_UPDATED', state);
+        io.to(`pool:${poolId}`).emit('GAME_STATE_UPDATED', normalizeGameState(state) ?? state);
 
         if (state.stage === 'showdown') {
           try {
