@@ -386,6 +386,7 @@ export async function initializeServer() {
 
     cancellationManager.io = io;
     eventListener.io = io;
+    eventListener.gameRoomManager = gameRoomManager;
 
     io.use(wsAuthMiddleware(authService));
 
@@ -433,6 +434,16 @@ export async function initializeServer() {
         if (!alreadyIn) {
           socket.emit('POOL_JOINED', { poolId, walletAddress });
           socket.to(`pool:${poolId}`).emit('PLAYER_JOINED', { walletAddress });
+        }
+
+        // If game already started (on-chain deposit beat socket join), sync state to late joiner
+        const stateRaw = await redisClient.hGet(`room:${poolId}:state`, 'data');
+        if (stateRaw) {
+          const st = JSON.parse(stateRaw);
+          if (st.gameStarted) {
+            const gameState = gameRoomManager ? await gameRoomManager.getRoom(poolId.toString()) : null;
+            socket.emit('GAME_STATE_UPDATED', gameState ?? { stage: 'starting', gameStarted: true, poolId });
+          }
         }
       });
 

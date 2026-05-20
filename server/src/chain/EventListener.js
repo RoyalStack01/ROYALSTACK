@@ -278,16 +278,48 @@ export default class EventListener {
 
   async _startGame(poolId) {
     try {
-      console.log(`🚀 Starting game in pool ${poolId}`);
-
       const poolKey = `room:${poolId}:state`;
-      const poolDataStr = await this.redisClient.hGetAll(poolKey);
-
-      if (poolDataStr?.data) {
-        const poolState = JSON.parse(poolDataStr.data);
+      const poolDataStr = await this.redisClient.hGet(poolKey, 'data');
+      if (poolDataStr) {
+        const poolState = JSON.parse(poolDataStr);
+        // Guard against double-start
+        if (poolState.gameStarted) {
+          console.log(`⚠ Pool ${poolId} already started — skipping duplicate _startGame`);
+          return;
+        }
         poolState.gameStarted = true;
         poolState.startedAt = Date.now();
         await this.redisClient.hSet(poolKey, 'data', JSON.stringify(poolState));
+      }
+
+      console.log(`🚀 Starting game in pool ${poolId}`);
+
+      // Build player list from Redis for game initialization
+      const playersRaw = await this.redisClient.hGetAll(`room:${poolId}:players`);
+      const players = Object.entries(playersRaw).map(([addr, raw]) => {
+        try { const p = JSON.parse(raw); return { id: addr, address: addr, stack: p.stack ?? 1000 }; }
+        catch { return { id: addr, address: addr, stack: 1000 }; }
+      });
+
+      // Initialize game room and get initial state
+      let gameState = null;
+      if (this.gameRoomManager) {
+        try {
+          gameState = await this.gameRoomManager.createRoom(poolId.toString(), players);
+          console.log(`✓ Game room initialized for pool ${poolId}`);
+        } catch (err) {
+          console.warn(`⚠ gameRoomManager.createRoom failed for pool ${poolId}: ${err.message}`);
+        }
+      }
+
+      // Emit to all clients in the pool room
+      if (this.io) {
+        this.io.to(`pool:${poolId}`).emit('GAME_STATE_UPDATED', gameState ?? {
+          stage: 'starting',
+          gameStarted: true,
+          poolId: poolId.toString(),
+          players,
+        });
       }
 
       console.log(`✓ Game started in pool ${poolId}`);

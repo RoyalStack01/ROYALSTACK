@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
 // Empty strings from .env become undefined so optional() works correctly
-const optionalStr = (schema) => z.preprocess(v => (v === '' ? undefined : v), schema.optional());
+const trimmed = (v) => { const s = typeof v === 'string' ? v.trim() : v; return s === '' ? undefined : s; };
+const optionalStr = (schema) => z.preprocess(trimmed, schema.optional());
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'staging', 'production']).default('development'),
@@ -24,7 +25,7 @@ const schema = z.object({
   CONTRACT_ADDRESS: optionalStr(z.string().regex(/^0x[0-9a-fA-F]{40}$/, 'CONTRACT_ADDRESS must be a valid EVM address')),
 
   // Allowed CORS origin for the frontend
-  FRONTEND_URL: z.preprocess(v => (v === '' ? undefined : v), z.string().url().default('http://localhost:3000')),
+  FRONTEND_URL: z.preprocess(v => { const s = typeof v === 'string' ? v.trim() : v; return s === '' ? undefined : s; }, z.string().url().default('http://localhost:3000')),
 
   // JWT secret for socket auth signatures (min 32 chars) — required in production
   JWT_SECRET: optionalStr(z.string()),
