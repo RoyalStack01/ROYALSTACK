@@ -4,6 +4,7 @@
  */
 
 import { ethers } from 'ethers';
+import crypto from 'crypto';
 import { createRequire } from 'module';
 import { mezoTestnet } from './mezo.config.js';
 
@@ -257,20 +258,24 @@ export default class EventListener {
     try {
       console.log(`❌ PoolCancelled: poolId=${poolId}`);
 
-      const poolKey = `room:${poolId}:state`;
-      const poolState = await this.redisClient.hGetAll(poolKey);
-
-      if (poolState?.data) {
-        const state = JSON.parse(poolState.data);
-        state.status = 'CLOSED';
-        await this.redisClient.hSet(poolKey, 'data', JSON.stringify(state));
-      }
-
       if (this.io) {
         this.io.to(`pool:${poolId}`).emit('POOL_CANCELLED', { poolId: poolId.toString(), reason: 'on-chain' });
       }
 
-      console.log(`✓ Pool ${poolId} marked as closed`);
+      // Full cleanup — players are refunded on-chain, no need to keep Redis state
+      await this.redisClient.del(`room:${poolId}:state`);
+      await this.redisClient.del(`room:${poolId}:players`);
+      await this.redisClient.del(`oracle:seed:${poolId}`);
+
+      if (this.gameRoomManager) {
+        this.gameRoomManager.activeGames.delete(poolId.toString());
+      }
+
+      if (this.cancellationManager) {
+        this.cancellationManager.clearPoolTimeout(poolId);
+      }
+
+      console.log(`✓ Pool ${poolId} cleaned up`);
     } catch (error) {
       console.error('Error handling PoolCancelled:', error);
     }
@@ -298,6 +303,10 @@ export default class EventListener {
       }
 
       console.log(`🚀 Starting game in pool ${poolId}`);
+
+      // Generate and store the shuffle seed so createRoom can find it
+      const seed = crypto.randomBytes(32).toString('hex');
+      await this.redisClient.set(`oracle:seed:${poolId}`, seed, { EX: 86400 });
 
       // Build player list from Redis for game initialization
       const playersRaw = await this.redisClient.hGetAll(`room:${poolId}:players`);
