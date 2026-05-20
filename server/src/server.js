@@ -429,7 +429,7 @@ export async function initializeServer() {
           await redisClient.hSet(
             `room:${poolId}:players`,
             walletAddress,
-            JSON.stringify({ status: 'joined', joinedAt: Date.now() })
+            JSON.stringify({ address: walletAddress, status: 'joined', joinedAt: Date.now() })
           );
         }
 

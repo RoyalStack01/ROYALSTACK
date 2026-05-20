@@ -89,7 +89,12 @@ export default class PoolService {
   async getPoolPlayers(poolId) {
     const sid = safeId(poolId);
     const players = await this.redis.hGetAll(`room:${sid}:players`);
-    return Object.values(players).map(p => JSON.parse(p));
+    return Object.entries(players).map(([addr, raw]) => {
+      const p = JSON.parse(raw);
+      // Hash key is the canonical address — include it if the value omits it
+      if (!p.address) p.address = addr;
+      return p;
+    });
   }
 
   async getAllPools() {
