@@ -62,7 +62,7 @@ export class GameStateMachine {
    */
   startHand(players, seed) {
     this.deck.shuffle(seed);
-    
+
     // Initialize state
     this.state = {
       players: players.map(p => ({
@@ -70,6 +70,7 @@ export class GameStateMachine {
         folded: false,
         isAllIn: false,
         betThisStreet: 0,
+        totalHandContribution: 0,
         hand: []
       })),
       stage: 'preflop',
@@ -144,6 +145,7 @@ export class GameStateMachine {
     const actual = Math.min(player.stack, amount);
     player.stack -= actual;
     player.betThisStreet += actual;
+    player.totalHandContribution = (player.totalHandContribution || 0) + actual;
     this.state.pot += actual;
     if (player.stack === 0) player.isAllIn = true;
   }

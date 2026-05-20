@@ -67,6 +67,8 @@ export default class GameRoomManager {
     await this.redis.set(`room:${poolId}:game`, JSON.stringify(result), { EX: 86400 });
 
     if (result.stage === 'showdown') {
+      // _resolveShowdown mutates result in-place (sets result.winners, result.sidePots)
+      // and re-persists, so the state returned below already contains winner data.
       await this._resolveShowdown(poolId, result);
     }
 
@@ -74,35 +76,56 @@ export default class GameRoomManager {
   }
 
   async _resolveShowdown(poolId, state) {
-    const sidePots = this.gameStateMachine.sidePotCalculator.calculate(
-      state.players
-    );
+    const sidePots = this.gameStateMachine.sidePotCalculator.calculate(state.players);
 
-    const results = this.gameStateMachine.showdownResolver.resolve(
-      state.players,
-      state.communityCards,
-      sidePots
-    );
+    // Aggregate winner amounts: { playerId → totalAmount }
+    let winnerAmounts = {};
+    const activePlayers = state.players.filter(p => !p.folded);
 
-    const winners = {};
-    results.forEach(potResult => {
-      potResult.winners.forEach(winnerId => {
-        winners[winnerId] = (winners[winnerId] || 0) + potResult.share;
+    if (activePlayers.length === 1) {
+      // Fold equity — sole survivor wins the whole pot
+      winnerAmounts[activePlayers[0].id] = state.pot;
+    } else {
+      const results = this.gameStateMachine.showdownResolver.resolve(
+        activePlayers,
+        state.communityCards,
+        sidePots
+      );
+      results.filter(Boolean).forEach(potResult => {
+        potResult.winners.forEach(winnerId => {
+          winnerAmounts[winnerId] = (winnerAmounts[winnerId] || 0) + potResult.share;
+        });
       });
+    }
+
+    // Build winners array in the shape the frontend expects: [{ walletAddress, amount }]
+    const winnersArray = Object.entries(winnerAmounts).map(([id, amount]) => {
+      const player = state.players.find(p => p.id === id);
+      return {
+        walletAddress: player?.address ?? player?.walletAddress ?? id,
+        amount,
+      };
     });
 
-    await this.historian.saveHand(
-      poolId,
-      state.handNumber,
-      state,
-      sidePots,
-      winners
-    );
+    // Mutate state in-place — applyAction returns this same object, so the
+    // socket handler will emit it with winners already set.
+    state.winners = winnersArray;
+    state.sidePots = sidePots;
 
-    // Pay winner on-chain
-    const winnerAddress = Object.keys(winners).reduce((a, b) =>
-      winners[a] >= winners[b] ? a : b
-    );
+    // Persist the enriched state (with winners) to Redis
+    this.activeGames.set(poolId, state);
+    await this.redis.set(`room:${poolId}:game`, JSON.stringify(state), { EX: 86400 });
+
+    // Hand history (single call — server.js must NOT duplicate this)
+    try {
+      await this.historian.saveHand(poolId, state.handNumber, state, sidePots, winnerAmounts);
+    } catch (err) {
+      console.error(`saveHand failed for pool ${poolId}:`, err.message);
+    }
+
+    // On-chain payout to the biggest winner
+    const topWinner = winnersArray.reduce((a, b) => (a.amount >= b.amount ? a : b), null);
+    const winnerAddress = topWinner?.walletAddress;
 
     if (this.signedContract && winnerAddress) {
       try {
@@ -116,7 +139,7 @@ export default class GameRoomManager {
       console.warn(`awardPot skipped for pool ${poolId} — no admin wallet`);
     }
 
-    return { sidePots, results, winners };
+    return { sidePots, winners: winnersArray };
   }
 
   async closeRoom(poolId) {

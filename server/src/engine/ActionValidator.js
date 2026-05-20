@@ -123,12 +123,15 @@ export class ActionValidator {
   }
 
   static _validateRaise(state, player, totalAmount) {
+    // Post-flop open bet: no prior bet on this street — treat raise as bet
     if (state.currentBet === 0) {
-      return this._invalid("No bet to raise. Use 'bet' instead.");
+      return this._validateBet(state, player, totalAmount);
     }
 
-    const minRaise = state.lastRaiseAmount ? state.currentBet + state.lastRaiseAmount : state.currentBet * 2;
-    
+    const minRaise = state.lastRaiseAmount
+      ? state.currentBet + state.lastRaiseAmount
+      : state.currentBet * 2;
+
     if (totalAmount < minRaise) {
       return this._invalid(`Raise must be at least ${minRaise}.`);
     }

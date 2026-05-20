@@ -529,20 +529,32 @@ export async function initializeServer() {
         if (normalized) emitGameStateToRoom(io, `pool:${poolId}`, normalized);
 
         if (state.stage === 'showdown') {
-          try {
-            await historian.saveHand(
-              poolId,
-              state.handNumber,
-              state,
-              state.sidePots,
-              state.winners
-            );
-            io.to(`pool:${poolId}`).emit('HAND_SAVED', {
-              handId: state.handId,
-            });
-          } catch (error) {
-            console.error('Error saving hand:', error);
-          }
+          // historian.saveHand + awardPot already called inside gameRoomManager._resolveShowdown.
+          // Emit HAND_SAVED so the log updates, then schedule cleanup.
+          io.to(`pool:${poolId}`).emit('HAND_SAVED', { handId: state.handId });
+
+          // Give clients 5 s to display the winner overlay, then end the game.
+          setTimeout(async () => {
+            try {
+              // Mark pool CLOSED in Redis so re-entry checks stop routing here
+              const roomStateRaw = await redisClient.hGet(`room:${poolId}:state`, 'data');
+              if (roomStateRaw) {
+                const roomState = JSON.parse(roomStateRaw);
+                roomState.status = 'CLOSED';
+                await redisClient.hSet(`room:${poolId}:state`, 'data', JSON.stringify(roomState));
+              }
+
+              io.to(`pool:${poolId}`).emit('GAME_ENDED', {
+                poolId,
+                winners: state.winners ?? [],
+              });
+
+              await gameRoomManager.closeRoom(poolId);
+              console.log(`✓ Game ended and room ${poolId} closed`);
+            } catch (err) {
+              console.error(`Error closing room ${poolId}:`, err.message);
+            }
+          }, 5000);
         }
       });
 
