@@ -52,6 +52,11 @@ export default class GameRoomManager {
     const state = await this.getRoom(poolId);
     if (!state) throw new Error(`Room ${poolId} not found`);
 
+    // Restore engine state from Redis after a server restart
+    if (this.gameStateMachine.state !== state) {
+      this.gameStateMachine.state = state;
+    }
+
     const result = this.gameStateMachine.applyAction(playerId, action);
 
     if (result.error) {

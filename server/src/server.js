@@ -512,7 +512,13 @@ export async function initializeServer() {
         }
 
         const { poolId, action } = data;
-        const state = gameStateMachine.applyAction(walletAddress, action);
+        let state;
+        try {
+          state = await gameRoomManager.applyAction(poolId, walletAddress, action);
+        } catch (err) {
+          socket.emit('ACTION_INVALID', { error: err.message });
+          return;
+        }
 
         if (state.error) {
           socket.emit('ACTION_INVALID', { error: state.error });
