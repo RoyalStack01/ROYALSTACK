@@ -162,6 +162,7 @@ export async function initializeServer() {
 
     // Admin wallet — signs createPool, cancelPool, awardPot on behalf of the server
     let signedContract = null;
+    let poolCreating = false; // mutex: admin wallet has one nonce at a time
     if (process.env.ADMIN_PRIVATE_KEY && eventListener.provider) {
       const adminWallet = new ethers.Wallet(process.env.ADMIN_PRIVATE_KEY, eventListener.provider);
       signedContract = new ethers.Contract(contractAddress, POOL_ABI, adminWallet);
@@ -362,6 +363,10 @@ export async function initializeServer() {
       if (!signedContract) {
         return res.status(503).json({ error: 'Admin wallet not configured' });
       }
+      if (poolCreating) {
+        return res.status(429).json({ error: 'A pool is already being created. Please wait a moment.' });
+      }
+      poolCreating = true;
       try {
         const tx = await signedContract.createPool();
         const receipt = await tx.wait();
@@ -386,6 +391,8 @@ export async function initializeServer() {
       } catch (error) {
         console.error('Error creating pool:', error.message);
         res.status(500).json({ error: error.message });
+      } finally {
+        poolCreating = false;
       }
     });
 

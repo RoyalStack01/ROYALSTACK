@@ -168,6 +168,14 @@ export default class EventListener {
     try {
       console.log(`📍 PoolCreated: poolId=${poolId}, creator=${creator}`);
 
+      // Idempotency: if we already processed this event, skip — prevents duplicate
+      // processing from chain reorgs or overlapping poll windows.
+      const already = await this.redisClient.hGet(`room:${poolId}:state`, 'data');
+      if (already) {
+        console.log(`⚠ Pool ${poolId} already initialized — skipping duplicate PoolCreated`);
+        return;
+      }
+
       const poolState = {
         poolId: poolId.toString(),
         creator,
@@ -179,7 +187,6 @@ export default class EventListener {
       };
 
       await this.redisClient.hSet(`room:${poolId}:state`, 'data', JSON.stringify(poolState));
-      // Don't pre-populate players — the creator's seat is confirmed by DepositMade event
 
       if (this.cancellationManager) {
         await this.cancellationManager.startPoolTimeout(poolId);
@@ -217,9 +224,16 @@ export default class EventListener {
         console.log(`⚠ Bootstrapped room:${poolId}:state from DepositMade (PoolCreated was missed)`);
       }
 
-      // Merge with any existing record (socket join may have already created a pending entry).
+      // Idempotency: skip if this deposit was already confirmed.
       const existing = await this.redisClient.hGet(`room:${poolId}:players`, addr);
-      const base = (existing && existing !== 'joined') ? JSON.parse(existing) : {};
+      if (existing) {
+        const rec = JSON.parse(existing);
+        if (rec.status === 'active') {
+          console.log(`⚠ DepositMade for ${addr} in pool ${poolId} already processed — skipping`);
+          return;
+        }
+      }
+      const base = existing ? JSON.parse(existing) : {};
 
       await this.redisClient.hSet(`room:${poolId}:players`, addr, JSON.stringify({
         ...base,
