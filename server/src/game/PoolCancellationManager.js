@@ -221,6 +221,10 @@ export default class PoolCancellationManager {
         this.io.to(`pool:${poolId}`).emit('POOL_CANCELLED', { poolId: poolId.toString(), reason });
       }
 
+      // Remove all pool keys so they don't keep appearing in lobby scans
+      await this.poolService.deletePoolKeys(poolId);
+      this.poolService.invalidatePoolsCache();
+
       return {
         success: true,
         poolId,

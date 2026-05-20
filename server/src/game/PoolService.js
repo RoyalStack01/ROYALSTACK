@@ -106,16 +106,50 @@ export default class PoolService {
       return this._allPoolsCache.ids;
     }
 
-    // Use SCAN instead of KEYS to avoid blocking Redis on large keyspaces
+    // SCAN for candidate IDs (non-blocking, unlike KEYS)
     const ids = new Set();
     await Promise.all([
       this._scan('room:*:state', k => { const m = k.match(/room:(\d+):state/); if (m) ids.add(m[1]); }),
       this._scan('pool:[0-9]*',   k => { const m = k.match(/^pool:(\d+)$/);     if (m) ids.add(m[1]); }),
     ]);
 
-    const result = [...ids];
-    this._allPoolsCache = { ids: result, at: Date.now() };
-    return result;
+    // Filter out CLOSED pools and delete their stale keys so they stop accumulating
+    const activeIds = [];
+    await Promise.all([...ids].map(async (id) => {
+      const sid = safeId(id);
+      let status = 'ACTIVE';
+      try {
+        const raw = await this.redis.hGet(`room:${sid}:state`, 'data');
+        if (raw) {
+          status = JSON.parse(raw).status ?? 'ACTIVE';
+        } else {
+          const cached = await this.redis.get(`pool:${sid}`);
+          if (cached) status = JSON.parse(cached).status ?? 'ACTIVE';
+        }
+      } catch {}
+
+      if (status === 'CLOSED') {
+        this.deletePoolKeys(id).catch(() => {});
+      } else {
+        activeIds.push(id);
+      }
+    }));
+
+    this._allPoolsCache = { ids: activeIds, at: Date.now() };
+    return activeIds;
+  }
+
+  /** Delete all Redis keys for a pool (call on game end / cancellation). */
+  async deletePoolKeys(poolId) {
+    const sid = safeId(poolId);
+    await this.redis.del([
+      `room:${sid}:meta`,
+      `room:${sid}:state`,
+      `room:${sid}:players`,
+      `room:${sid}:abandoned`,
+      `pool:${sid}`,
+      `pool:${sid}:cancelled`,
+    ]);
   }
 
   /** Cursor-iterate over a key pattern without blocking Redis. */

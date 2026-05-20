@@ -443,8 +443,10 @@ export async function initializeServer() {
         }
         io.to(`pool:${poolId}`).emit('GAME_ENDED', { poolId, winners: state.winners ?? [] });
         await gameRoomManager.closeRoom(poolId);
-        await redisClient.del(`room:${poolId}:abandoned`);
+        // Delete all pool keys so they stop accumulating in Redis and don't re-appear in lobby scans
+        await poolService.deletePoolKeys(poolId);
         poolsWithAbandoned.delete(poolId);
+        poolService.invalidatePoolsCache();
         console.log(`✓ Game finalised and room ${poolId} closed`);
       } catch (err) {
         console.error(`Error finalising room ${poolId}:`, err.message);
