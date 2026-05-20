@@ -292,6 +292,11 @@ export default class EventListener {
         await this.redisClient.hSet(poolKey, 'data', JSON.stringify(poolState));
       }
 
+      // Clear the fill timeout so it doesn't fire and try to cancel an active game
+      if (this.cancellationManager) {
+        this.cancellationManager.clearPoolTimeout(poolId);
+      }
+
       console.log(`🚀 Starting game in pool ${poolId}`);
 
       // Build player list from Redis for game initialization
