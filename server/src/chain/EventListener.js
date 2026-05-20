@@ -10,6 +10,7 @@ function normalizeGameState(state) {
   if (!state || !Array.isArray(state.players)) return null;
   return {
     ...state,
+    currentPlayer: state.currentPlayer ?? state.activePlayerId ?? null,
     players: state.players.map(p => ({
       ...p,
       walletAddress: p.walletAddress ?? p.address ?? p.id ?? '',

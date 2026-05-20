@@ -49,6 +49,8 @@ function normalizeGameState(state) {
   if (!state || !Array.isArray(state.players)) return null;
   return {
     ...state,
+    // Engine uses activePlayerId; frontend expects currentPlayer
+    currentPlayer: state.currentPlayer ?? state.activePlayerId ?? null,
     players: state.players.map(p => ({
       ...p,
       walletAddress: p.walletAddress ?? p.address ?? p.id ?? '',
