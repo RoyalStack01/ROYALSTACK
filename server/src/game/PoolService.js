@@ -19,6 +19,8 @@ export default class PoolService {
   constructor(redisClient, contract) {
     this.redis = redisClient;
     this.contract = contract;
+    this._allPoolsCache = null;   // { ids: string[], at: number }
+    this._ALL_POOLS_TTL = 10_000; // 10 s
   }
 
   async getPoolState(poolId) {
@@ -99,16 +101,36 @@ export default class PoolService {
   }
 
   async getAllPools() {
-    // EventListener writes room state to room:N:state; pool:N is only written
-    // after a getPoolState on-chain call. Check both namespaces.
-    const [roomKeys, poolKeys] = await Promise.all([
-      this.redis.keys('room:*:state'),
-      this.redis.keys('pool:*'),
-    ]);
+    // Serve from cache if fresh
+    if (this._allPoolsCache && Date.now() - this._allPoolsCache.at < this._ALL_POOLS_TTL) {
+      return this._allPoolsCache.ids;
+    }
+
+    // Use SCAN instead of KEYS to avoid blocking Redis on large keyspaces
     const ids = new Set();
-    roomKeys.forEach(k => { const m = k.match(/room:(\d+):state/); if (m) ids.add(m[1]); });
-    poolKeys.forEach(k => { const m = k.match(/^pool:(\d+)$/); if (m) ids.add(m[1]); });
-    return [...ids];
+    await Promise.all([
+      this._scan('room:*:state', k => { const m = k.match(/room:(\d+):state/); if (m) ids.add(m[1]); }),
+      this._scan('pool:[0-9]*',   k => { const m = k.match(/^pool:(\d+)$/);     if (m) ids.add(m[1]); }),
+    ]);
+
+    const result = [...ids];
+    this._allPoolsCache = { ids: result, at: Date.now() };
+    return result;
+  }
+
+  /** Cursor-iterate over a key pattern without blocking Redis. */
+  async _scan(pattern, onKey) {
+    let cursor = 0;
+    do {
+      const reply = await this.redis.scan(cursor, { MATCH: pattern, COUNT: 100 });
+      cursor = reply.cursor;
+      reply.keys.forEach(onKey);
+    } while (cursor !== 0);
+  }
+
+  /** Invalidate the pool-list cache (call when a new pool is created/closed). */
+  invalidatePoolsCache() {
+    this._allPoolsCache = null;
   }
 
   async syncPoolFromChain(poolId) {

@@ -424,6 +424,133 @@ export async function initializeServer() {
     eventListener.io = io;
     eventListener.gameRoomManager = gameRoomManager;
 
+    // ── Abandonment tracking ───────────────────────────────────────────────
+    const RECONNECT_GRACE_MS  = 3 * 60 * 1000; // 3 min per-player grace window
+    const ALL_ABANDONED_MS    = 5 * 60 * 1000; // 5 min total-abandonment window
+    const disconnectTimers    = new Map();      // `${poolId}:${addr}` → timeout
+    const allAbandonedTimers  = new Map();      // poolId → timeout
+    const poolsWithAbandoned  = new Set();      // in-memory guard — skip Redis when empty
+
+    // Mark pool CLOSED, emit GAME_ENDED, clean up Redis — shared by normal
+    // showdown path and forced-abandonment path.
+    async function finaliseGame(poolId, state) {
+      try {
+        const roomStateRaw = await redisClient.hGet(`room:${poolId}:state`, 'data');
+        if (roomStateRaw) {
+          const rs = JSON.parse(roomStateRaw);
+          rs.status = 'CLOSED';
+          await redisClient.hSet(`room:${poolId}:state`, 'data', JSON.stringify(rs));
+        }
+        io.to(`pool:${poolId}`).emit('GAME_ENDED', { poolId, winners: state.winners ?? [] });
+        await gameRoomManager.closeRoom(poolId);
+        await redisClient.del(`room:${poolId}:abandoned`);
+        poolsWithAbandoned.delete(poolId);
+        console.log(`✓ Game finalised and room ${poolId} closed`);
+      } catch (err) {
+        console.error(`Error finalising room ${poolId}:`, err.message);
+      }
+    }
+
+    // Force-fold one player, emit updated state, then chain-fold any other
+    // abandoned players who now become active.
+    async function executeForceFold(poolId, playerId) {
+      try {
+        const state = await gameRoomManager.applyAction(poolId, playerId, { type: 'fold' });
+        if (state.error) {
+          console.warn(`Force-fold skipped for ${maskAddress(playerId)} in pool ${poolId}: ${state.error}`);
+          return;
+        }
+        console.log(`✂ Force-folded ${maskAddress(playerId)} in pool ${poolId}`);
+
+        const normalized = normalizeGameState(state);
+        if (normalized) emitGameStateToRoom(io, `pool:${poolId}`, normalized);
+
+        if (state.stage === 'showdown') {
+          io.to(`pool:${poolId}`).emit('HAND_SAVED', { handId: state.handId });
+          setTimeout(() => finaliseGame(poolId, state), 5000);
+        } else {
+          // Chain: if the next active player is also abandoned, fold them too
+          await advanceAbandonedPlayers(poolId);
+        }
+      } catch (err) {
+        console.error(`executeForceFold error in pool ${poolId}:`, err.message);
+      }
+    }
+
+    // After any state advance, check if the new active player is abandoned
+    // and fold them automatically. Repeats until a live player or showdown.
+    // Fast-path: skips Redis entirely when no pool has abandoned players.
+    async function advanceAbandonedPlayers(poolId) {
+      if (!poolsWithAbandoned.has(poolId)) return; // nothing to do — no Redis hit
+
+      const gameState = await gameRoomManager.getRoom(poolId);
+      if (!gameState || gameState.stage === 'showdown') return;
+
+      const activePlayerId = gameState.activePlayerId;
+      if (!activePlayerId) return;
+
+      const abandonedSet = await redisClient.sMembers(`room:${poolId}:abandoned`);
+      const abandonedLower = abandonedSet.map(a => a.toLowerCase());
+
+      if (abandonedLower.includes(activePlayerId.toLowerCase())) {
+        await executeForceFold(poolId, activePlayerId);
+      }
+    }
+
+    // Called when a player's grace timer expires without reconnection.
+    async function handlePlayerAbandonment(poolId, walletAddress) {
+      // Mark abandoned in Redis and in memory so advanceAbandonedPlayers fires
+      poolsWithAbandoned.add(poolId);
+      await redisClient.sAdd(`room:${poolId}:abandoned`, walletAddress);
+      console.log(`⏱ ${maskAddress(walletAddress)} abandoned pool ${poolId}`);
+
+      const gameState = await gameRoomManager.getRoom(poolId);
+      if (!gameState || gameState.stage === 'showdown') return;
+
+      // If it's currently their turn, fold them right now
+      if ((gameState.activePlayerId ?? '').toLowerCase() === walletAddress.toLowerCase()) {
+        await executeForceFold(poolId, walletAddress);
+      }
+      // Otherwise the fold happens naturally when advanceAbandonedPlayers is called
+      // after the next legitimate action.
+    }
+
+    // Called when ALL sockets leave a room and the 5-min total-abandonment
+    // timer fires. Awards pot to the player with the most chips remaining.
+    async function handleAllAbandoned(poolId) {
+      // Re-check the room is still empty
+      const room = `pool:${poolId}`;
+      const roomSockets = io.sockets.adapter.rooms.get(room);
+      if (roomSockets && roomSockets.size > 0) return; // someone came back
+
+      const gameState = await gameRoomManager.getRoom(poolId);
+      if (!gameState || gameState.stage === 'showdown') return;
+
+      console.log(`💀 Pool ${poolId} fully abandoned — awarding pot to chip leader`);
+
+      const activePlayers = gameState.players.filter(p => !p.folded);
+      if (activePlayers.length === 0) return;
+
+      // Find the chip leader (stack + any chips already bet this street)
+      const leader = activePlayers.reduce((best, p) => {
+        const total = (p.stack ?? 0) + (p.betThisStreet ?? 0);
+        const bestTotal = (best.stack ?? 0) + (best.betThisStreet ?? 0);
+        return total >= bestTotal ? p : best;
+      });
+
+      // Force-fold everyone except the leader so the normal showdown path fires
+      poolsWithAbandoned.add(poolId);
+      for (const p of activePlayers) {
+        if (p.id === leader.id) continue;
+        await redisClient.sAdd(`room:${poolId}:abandoned`, p.id);
+      }
+      // Now fold the first non-leader — chain folds will handle the rest
+      const firstToFold = activePlayers.find(p => p.id !== leader.id);
+      if (firstToFold) {
+        await executeForceFold(poolId, firstToFold.id);
+      }
+    }
+
     io.use(wsAuthMiddleware(authService));
 
     io.on('connection', async (socket) => {
@@ -444,6 +571,27 @@ export async function initializeServer() {
 
       socket.on('JOIN_POOL', async (data) => {
         const { poolId } = data;
+
+        // Track which pool this socket is in — needed by disconnect handler
+        socket.data.poolId = poolId;
+
+        // If reconnecting after a disconnect, cancel the grace timer and
+        // remove from the abandoned set so they can keep playing.
+        const timerKey = `${poolId}:${walletAddress}`;
+        if (disconnectTimers.has(timerKey)) {
+          clearTimeout(disconnectTimers.get(timerKey));
+          disconnectTimers.delete(timerKey);
+          await redisClient.sRem(`room:${poolId}:abandoned`, walletAddress);
+          // Clear memory flag if no one is abandoned any more
+          const remaining = await redisClient.sCard(`room:${poolId}:abandoned`);
+          if (remaining === 0) poolsWithAbandoned.delete(poolId);
+          console.log(`↩ ${maskAddress(walletAddress)} reconnected to pool ${poolId} — grace timer cancelled`);
+        }
+        // Cancel total-abandonment timer if anyone comes back
+        if (allAbandonedTimers.has(poolId)) {
+          clearTimeout(allAbandonedTimers.get(poolId));
+          allAbandonedTimers.delete(poolId);
+        }
 
         // If pool already closed, tell client immediately
         const roomRaw = await redisClient.hGet(`room:${poolId}:state`, 'data');
@@ -529,32 +677,11 @@ export async function initializeServer() {
         if (normalized) emitGameStateToRoom(io, `pool:${poolId}`, normalized);
 
         if (state.stage === 'showdown') {
-          // historian.saveHand + awardPot already called inside gameRoomManager._resolveShowdown.
-          // Emit HAND_SAVED so the log updates, then schedule cleanup.
           io.to(`pool:${poolId}`).emit('HAND_SAVED', { handId: state.handId });
-
-          // Give clients 5 s to display the winner overlay, then end the game.
-          setTimeout(async () => {
-            try {
-              // Mark pool CLOSED in Redis so re-entry checks stop routing here
-              const roomStateRaw = await redisClient.hGet(`room:${poolId}:state`, 'data');
-              if (roomStateRaw) {
-                const roomState = JSON.parse(roomStateRaw);
-                roomState.status = 'CLOSED';
-                await redisClient.hSet(`room:${poolId}:state`, 'data', JSON.stringify(roomState));
-              }
-
-              io.to(`pool:${poolId}`).emit('GAME_ENDED', {
-                poolId,
-                winners: state.winners ?? [],
-              });
-
-              await gameRoomManager.closeRoom(poolId);
-              console.log(`✓ Game ended and room ${poolId} closed`);
-            } catch (err) {
-              console.error(`Error closing room ${poolId}:`, err.message);
-            }
-          }, 5000);
+          setTimeout(() => finaliseGame(poolId, state), 5000);
+        } else {
+          // After a legit action, auto-fold any abandoned players who are now active
+          await advanceAbandonedPlayers(poolId);
         }
       });
 
@@ -567,6 +694,41 @@ export async function initializeServer() {
 
       socket.on('disconnect', async () => {
         console.log(`✗ ${maskAddress(walletAddress)} disconnected`);
+
+        const poolId = socket.data.poolId;
+        if (!poolId) return;
+
+        // Only activate abandonment logic if a game is in progress
+        const roomRaw = await redisClient.hGet(`room:${poolId}:state`, 'data');
+        if (!roomRaw) return;
+        const roomState = JSON.parse(roomRaw);
+        if (!roomState.gameStarted || roomState.status === 'CLOSED') return;
+
+        // ── Per-player grace timer ────────────────────────────────────────
+        const timerKey = `${poolId}:${walletAddress}`;
+        const graceTimer = setTimeout(
+          () => { disconnectTimers.delete(timerKey); handlePlayerAbandonment(poolId, walletAddress); },
+          RECONNECT_GRACE_MS
+        );
+        disconnectTimers.set(timerKey, graceTimer);
+        console.log(`⏳ ${maskAddress(walletAddress)} has ${RECONNECT_GRACE_MS / 60000} min to reconnect to pool ${poolId}`);
+
+        // ── Total-abandonment timer (all sockets gone) ────────────────────
+        // Wait one tick so socket.io removes the socket from the room first
+        setImmediate(() => {
+          const room = `pool:${poolId}`;
+          const roomSockets = io.sockets.adapter.rooms.get(room);
+          const remaining = roomSockets ? roomSockets.size : 0;
+
+          if (remaining === 0 && !allAbandonedTimers.has(poolId)) {
+            console.log(`⚠ All players gone from pool ${poolId} — ${ALL_ABANDONED_MS / 60000} min total-abandonment timer`);
+            const allTimer = setTimeout(
+              () => { allAbandonedTimers.delete(poolId); handleAllAbandoned(poolId); },
+              ALL_ABANDONED_MS
+            );
+            allAbandonedTimers.set(poolId, allTimer);
+          }
+        });
       });
     });
 

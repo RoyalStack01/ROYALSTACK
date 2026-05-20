@@ -25,18 +25,11 @@ export function createPoolRoutes(app, authService, poolService, cancellationMana
     next();
   };
 
-  // List all pools
+  // List all pools — lean response for lobby cards (no per-pool player/cancellation fan-out)
   app.get('/api/pools', authMiddleware, async (req, res) => {
     try {
       const poolIds = await poolService.getAllPools();
-      const pools = await Promise.all(
-        poolIds.map(async (id) => {
-          const state = await poolService.getPoolState(id);
-          const playerCount = await poolService.getPoolPlayers(id).then(p => p.length);
-          const cancellationInfo = await cancellationManager.getPoolCancellationInfo(id);
-          return { ...state, playerCount, cancellationInfo };
-        })
-      );
+      const pools = await Promise.all(poolIds.map(id => poolService.getPoolState(id)));
       res.json(pools);
     } catch (error) {
       res.status(500).json({ error: error.message });
