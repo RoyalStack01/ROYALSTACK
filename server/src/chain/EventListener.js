@@ -218,6 +218,12 @@ export default class EventListener {
       const playerCount = await this.redisClient.hLen(`room:${poolId}:players`);
       console.log(`🎮 Pool ${poolId} has ${playerCount}/5 players (${addr} → ${chips} chips)`);
 
+      this.io.to(`pool:${poolId}`).emit('PLAYER_JOINED', {
+        walletAddress: addr,
+        chips,
+        playerCount,
+      });
+
       if (playerCount === 5) {
         await this._startGame(poolId);
       }

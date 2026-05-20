@@ -200,8 +200,8 @@ export function createWaitlistRoutes(app, tursoClient, adminSecret) {
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 10;
 
     try {
-      const result = await tursoClient.client.execute(
-        `SELECT inviter.invite_code AS invite_code,
+      const result = await tursoClient.client.execute({
+        sql: `SELECT inviter.invite_code AS invite_code,
                 inviter.wallet AS wallet,
                 inviter.username AS username,
                 COUNT(referred.id) AS invites
@@ -210,8 +210,8 @@ export function createWaitlistRoutes(app, tursoClient, adminSecret) {
          GROUP BY inviter.invite_code, inviter.wallet, inviter.username
          ORDER BY invites DESC, inviter.created_at ASC
          LIMIT ?`,
-        { args: [limit] }
-      );
+        args: [limit],
+      });
 
       function maskWallet(w) {
         if (!w || typeof w !== 'string') return null;

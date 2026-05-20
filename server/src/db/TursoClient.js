@@ -136,7 +136,7 @@ export default class TursoClient {
               handsWon = handsWon + ?,
               totalWinnings = totalWinnings + ?,
               lastUpdated = CURRENT_TIMESTAMP`,
-      args: [playerId, 1, won ? 1 : 0, winnings, won ? 1 : 0, winnings],
+      args: [playerId, 1, won ? 1 : 0, Math.round(winnings), won ? 1 : 0, Math.round(winnings)],
     });
   }
 
@@ -225,8 +225,8 @@ export default class TursoClient {
         playerId TEXT PRIMARY KEY,
         handsPlayed INTEGER DEFAULT 0,
         handsWon INTEGER DEFAULT 0,
-        totalWinnings INTEGER DEFAULT 0,
-        totalRakePaid INTEGER DEFAULT 0,
+        totalWinnings REAL DEFAULT 0,
+        totalRakePaid REAL DEFAULT 0,
         lastUpdated DATETIME DEFAULT CURRENT_TIMESTAMP
       )`,
       `CREATE TABLE IF NOT EXISTS pool_stats (
