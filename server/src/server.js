@@ -329,18 +329,6 @@ export async function initializeServer() {
       }
     );
 
-    app.get('/api/pools/:poolId', authMiddleware(authService), async (req, res) => {
-      try {
-        const raw = await redisClient.hGet(`room:${req.params.poolId}:state`, 'data');
-        if (!raw) return res.status(404).json({ error: 'Pool not found' });
-        const state = JSON.parse(raw);
-        const playerCount = await redisClient.hLen(`room:${req.params.poolId}:players`);
-        res.json({ ...state, playerCount });
-      } catch (error) {
-        res.status(500).json({ error: error.message });
-      }
-    });
-
     app.get('/api/health', (req, res) => {
       res.json({ status: 'ok' });
     });
@@ -435,14 +423,15 @@ export async function initializeServer() {
 
         const alreadyIn = await redisClient.hExists(`room:${poolId}:players`, walletAddress);
 
-        await redisClient.hSet(
-          `room:${poolId}:players`,
-          walletAddress,
-          JSON.stringify({
-            status: 'joined',
-            joinedAt: Date.now(),
-          })
-        );
+        // Only write a placeholder if there's no existing record — don't overwrite
+        // an 'active' entry that EventListener already confirmed from on-chain deposit
+        if (!alreadyIn) {
+          await redisClient.hSet(
+            `room:${poolId}:players`,
+            walletAddress,
+            JSON.stringify({ status: 'joined', joinedAt: Date.now() })
+          );
+        }
 
         socket.join(`pool:${poolId}`);
 

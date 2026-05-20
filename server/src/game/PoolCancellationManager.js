@@ -283,14 +283,14 @@ export default class PoolCancellationManager {
    */
   async checkPoolReadiness(poolId) {
     const players = await this.poolService.getPoolPlayers(poolId);
+    const activeCount = players.filter(p => p.status === 'active').length;
 
-    if (players.length === 5) {
+    if (activeCount === 5) {
       this.clearPoolTimeout(poolId);
-      console.log(`🎮 Pool ${poolId} is ready! Starting game...`);
-      return { ready: true, playerCount: 5 };
+      return { ready: true, playerCount: activeCount };
     }
 
-    return { ready: false, playerCount: players.length };
+    return { ready: false, playerCount: activeCount };
   }
 
   /**

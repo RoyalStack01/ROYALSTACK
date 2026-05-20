@@ -230,16 +230,21 @@ export default class EventListener {
         status: 'active',
       }));
 
-      const playerCount = await this.redisClient.hLen(`room:${poolId}:players`);
-      console.log(`🎮 Pool ${poolId} has ${playerCount}/5 players (${addr} → ${chips} chips)`);
+      // Count only on-chain confirmed (active) players — socket-joined entries don't count
+      const allPlayers = await this.redisClient.hGetAll(`room:${poolId}:players`);
+      const activeCount = Object.values(allPlayers).filter(raw => {
+        try { return JSON.parse(raw).status === 'active'; } catch { return false; }
+      }).length;
+
+      console.log(`🎮 Pool ${poolId} has ${activeCount}/5 confirmed players (${addr} → ${chips} chips)`);
 
       this.io.to(`pool:${poolId}`).emit('PLAYER_JOINED', {
         walletAddress: addr,
         chips,
-        playerCount,
+        playerCount: activeCount,
       });
 
-      if (playerCount === 5) {
+      if (activeCount === 5) {
         await this._startGame(poolId);
       }
     } catch (error) {
