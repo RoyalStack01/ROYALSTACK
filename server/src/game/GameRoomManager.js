@@ -134,10 +134,12 @@ export default class GameRoomManager {
       : null;
     const winnerAddress = topWinner?.walletAddress;
 
+    let payoutInitiated = false;
     if (this.signedContract && winnerAddress) {
       try {
         const tx = await this.signedContract.awardPot(poolId, winnerAddress);
         await tx.wait();
+        payoutInitiated = true;
         console.log(`✓ awardPot: pool ${poolId} → ${winnerAddress}`);
       } catch (err) {
         console.error(`awardPot failed for pool ${poolId}:`, err.message);
@@ -146,7 +148,10 @@ export default class GameRoomManager {
       console.warn(`awardPot skipped for pool ${poolId} — no admin wallet`);
     }
 
-    return { sidePots, winners: winnersArray };
+    // Store payout result so finaliseGame can include it in GAME_ENDED
+    state.payoutInitiated = payoutInitiated;
+
+    return { sidePots, winners: winnersArray, payoutInitiated };
   }
 
   async closeRoom(poolId) {

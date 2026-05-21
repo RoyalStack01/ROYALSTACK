@@ -441,7 +441,11 @@ export async function initializeServer() {
           rs.status = 'CLOSED';
           await redisClient.hSet(`room:${poolId}:state`, 'data', JSON.stringify(rs));
         }
-        io.to(`pool:${poolId}`).emit('GAME_ENDED', { poolId, winners: state.winners ?? [] });
+        io.to(`pool:${poolId}`).emit('GAME_ENDED', {
+          poolId,
+          winners: state.winners ?? [],
+          payoutInitiated: state.payoutInitiated ?? false,
+        });
         await gameRoomManager.closeRoom(poolId);
         // Delete all pool keys so they stop accumulating in Redis and don't re-appear in lobby scans
         await poolService.deletePoolKeys(poolId);
