@@ -11,6 +11,7 @@ export default class GameRoomManager {
     this.historian = historian;
     this.signedContract = signedContract;
     this.activeGames = new Map(); // poolId -> game state
+    this._resolvedPools = new Set(); // guard against double awardPot
   }
 
   async createRoom(poolId, players) {
@@ -81,6 +82,8 @@ export default class GameRoomManager {
   }
 
   async _resolveShowdown(poolId, state) {
+    if (this._resolvedPools.has(String(poolId))) return;
+    this._resolvedPools.add(String(poolId));
     const sidePots = this.gameStateMachine.sidePotCalculator.calculate(state.players);
 
     // Aggregate winner amounts: { playerId → totalAmount }
@@ -156,6 +159,7 @@ export default class GameRoomManager {
 
   async closeRoom(poolId) {
     this.activeGames.delete(poolId);
+    this._resolvedPools.delete(String(poolId));
     await this.redis.del(`room:${poolId}:game`);
     await this.redis.del(`room:${poolId}:players`);
   }
