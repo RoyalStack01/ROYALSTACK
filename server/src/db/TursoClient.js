@@ -35,7 +35,7 @@ export default class TursoClient {
     const result = await this.client.execute({
       sql: `INSERT INTO hands (poolId, handNumber, winner, potAmount, stage)
             VALUES (?, ?, ?, ?, ?)`,
-      args: [poolId, handNumber, winner, Number(potAmount) || 0, stage],
+      args: [poolId, handNumber ?? null, winner, Number(potAmount) || 0, stage],
     });
     // libsql returns lastInsertRowid as BigInt — convert so callers can pass it as SQL args
     return Number(result.lastInsertRowid);
