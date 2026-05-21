@@ -461,7 +461,8 @@ export async function initializeServer() {
         console.log(`✓ Game finalised and room ${poolId} closed`);
       } catch (err) {
         console.error(`Error finalising room ${poolId}:`, err.message);
-      } finally {
+        // Only remove on error so a retry is possible; on success the key stays
+        // in the set to block the second timer that always fires 5s after showdown.
         finalisingGames.delete(key);
       }
     }
