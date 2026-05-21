@@ -431,13 +431,20 @@ export async function initializeServer() {
     const allAbandonedTimers  = new Map();      // poolId → timeout
     const poolsWithAbandoned  = new Set();      // in-memory guard — skip Redis when empty
 
+    // Guard so concurrent reconnects don't call finaliseGame twice for the same pool.
+    const finalisingGames = new Set();
+
     // Mark pool CLOSED, emit GAME_ENDED, clean up Redis — shared by normal
     // showdown path and forced-abandonment path.
     async function finaliseGame(poolId, state) {
+      const key = String(poolId);
+      if (finalisingGames.has(key)) return;
+      finalisingGames.add(key);
       try {
         const roomStateRaw = await redisClient.hGet(`room:${poolId}:state`, 'data');
         if (roomStateRaw) {
           const rs = JSON.parse(roomStateRaw);
+          if (rs.status === 'CLOSED') { finalisingGames.delete(key); return; } // already done
           rs.status = 'CLOSED';
           await redisClient.hSet(`room:${poolId}:state`, 'data', JSON.stringify(rs));
         }
@@ -454,6 +461,8 @@ export async function initializeServer() {
         console.log(`✓ Game finalised and room ${poolId} closed`);
       } catch (err) {
         console.error(`Error finalising room ${poolId}:`, err.message);
+      } finally {
+        finalisingGames.delete(key);
       }
     }
 
@@ -652,6 +661,12 @@ export async function initializeServer() {
                 })),
               };
               socket.emit('GAME_STATE_UPDATED', forSelf);
+
+              // If the game is already in showdown (e.g. server restarted mid-game),
+              // finalise it now so GAME_ENDED is emitted to everyone in the room.
+              if (gameState.stage === 'showdown') {
+                setTimeout(() => finaliseGame(poolId, gameState), 2000);
+              }
             }
             // if null, client stays on waiting screen — game will restart on next pool fill
           }
