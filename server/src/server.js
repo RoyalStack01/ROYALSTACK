@@ -486,7 +486,13 @@ export async function initializeServer() {
       if (!poolsWithAbandoned.has(poolId)) return; // nothing to do — no Redis hit
 
       const gameState = await gameRoomManager.getRoom(poolId);
-      if (!gameState || gameState.stage === 'showdown') return;
+      if (!gameState) return;
+      // If showdown was already resolved but finaliseGame never fired (e.g. prior crash),
+      // trigger it now rather than leaving the room dangling.
+      if (gameState.stage === 'showdown') {
+        setTimeout(() => finaliseGame(poolId, gameState), 0);
+        return;
+      }
 
       const activePlayerId = gameState.activePlayerId;
       if (!activePlayerId) return;

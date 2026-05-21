@@ -69,7 +69,12 @@ export default class GameRoomManager {
     if (result.stage === 'showdown') {
       // _resolveShowdown mutates result in-place (sets result.winners, result.sidePots)
       // and re-persists, so the state returned below already contains winner data.
-      await this._resolveShowdown(poolId, result);
+      // Wrapped in try/catch so any unexpected error here never blocks finaliseGame.
+      try {
+        await this._resolveShowdown(poolId, result);
+      } catch (err) {
+        console.error(`_resolveShowdown error in pool ${poolId}:`, err.message);
+      }
     }
 
     return result;
@@ -124,7 +129,9 @@ export default class GameRoomManager {
     }
 
     // On-chain payout to the biggest winner
-    const topWinner = winnersArray.reduce((a, b) => (a.amount >= b.amount ? a : b), null);
+    const topWinner = winnersArray.length > 0
+      ? winnersArray.reduce((a, b) => (a.amount >= b.amount ? a : b))
+      : null;
     const winnerAddress = topWinner?.walletAddress;
 
     if (this.signedContract && winnerAddress) {
